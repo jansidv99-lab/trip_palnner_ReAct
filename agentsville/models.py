@@ -1,13 +1,19 @@
-# Phase 3 – Step 0: Pydantic data models shared by the agents and the Streamlit UI
-# (moved out of planner.py so they can be imported without side effects).
+# Phase 2 – Step 1: Pydantic data models shared by the agent, tools, evals and UI.
 
 import datetime
 import uuid
 from enum import Enum
-from typing import List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+# Phase 2 – Step 3: the only city and date range covered by data/data.py.
+# Kept as constants (not read from the mock data); tests/test_models.py checks they match.
+SUPPORTED_DESTINATION = "AgentsVille"
+TRIP_WINDOW_START = datetime.date(2025, 6, 10)
+TRIP_WINDOW_END = datetime.date(2025, 6, 15)
+
+
+# Phase 2 – Step 1: interests a traveler can have (and activities are tagged with)
 class Interest(str, Enum):
     ART = "art"
     COOKING = "cooking"
@@ -32,59 +38,71 @@ class Interest(str, Enum):
     def __repr__(self):
         return self.value
 
-# Phase 3 – Step 0: models the user can pick from in the UI
+
+# Phase 2 – Step 2: models offered in the UI (all verified to work through the LLM proxy)
 class OpenAIModel(str, Enum):
-    GPT_41 = "gpt-4.1"  # Strongest; general-purpose reasoning and demanding tasks.
-    GPT_41_MINI = "gpt-4.1-mini"  # Default. Fast and affordable.
-    GPT_41_NANO = "gpt-4.1-nano"  # Fastest and cheapest; lightweight tasks.
+    GPT_4O_MINI = "gpt-4o-mini"  # default: fast and cheap
+    GPT_41_MINI = "gpt-4.1-mini"  # stronger, still affordable
+    GPT_41 = "gpt-4.1"  # strongest: demanding reasoning, LLM-judge evals
 
 
 # ---------------------------------------------------------------------------
 # Input: what the traveler tells us
 # ---------------------------------------------------------------------------
 
-# Phase 3 – Step 0: one traveler and their interests
-# Phase 3 – Step 2: added Field constraints so the UI gets clear validation errors
+
+# Phase 2 – Step 1: one traveler and their interests
 class Traveler(BaseModel):
-    """A traveler with a name, age, and list of interests."""
     name: str = Field(min_length=1)
     age: int = Field(ge=0, le=120)
-    interests: List[Interest] = Field(min_length=1)
+    interests: list[Interest] = Field(min_length=1)
 
 
-# Phase 3 – Step 0: the full trip request (travelers, destination, dates, budget)
-# Phase 3 – Step 2: added constraints and a date-order check
+# Phase 2 – Step 1: the full trip request – the agent's only input
 class VacationInfo(BaseModel):
-    """Vacation information including travelers, destination, dates, and budget.
-
-    budget is in fictional currency units.
-    """
-    travelers: List[Traveler] = Field(min_length=1)
+    travelers: list[Traveler] = Field(min_length=1)
     destination: str
     date_of_arrival: datetime.date
     date_of_departure: datetime.date
-    budget: int = Field(gt=0)
+    budget: int = Field(gt=0)  # fictional currency units, for the whole group
 
-    # Phase 3 – Step 2: a check that involves two fields runs after the fields are parsed
+    # Phase 2 – Step 3: accept any casing/spacing of AgentsVille; reject other cities
+    @field_validator("destination")
+    @classmethod
+    def check_destination(cls, value: str) -> str:
+        if value.strip().casefold() != SUPPORTED_DESTINATION.casefold():
+            raise ValueError(
+                f"destination must be {SUPPORTED_DESTINATION} (the only city with data)"
+            )
+        return SUPPORTED_DESTINATION
+
+    # Phase 2 – Step 1: departure must not be before arrival (needs two fields → model validator)
+    # Phase 2 – Step 3: both dates must fall inside the data window
     @model_validator(mode="after")
     def check_dates(self) -> "VacationInfo":
         if self.date_of_departure < self.date_of_arrival:
             raise ValueError("date_of_departure must be on or after date_of_arrival")
+        if self.date_of_arrival < TRIP_WINDOW_START or self.date_of_departure > TRIP_WINDOW_END:
+            raise ValueError(
+                f"dates must be between {TRIP_WINDOW_START} and {TRIP_WINDOW_END} "
+                "(the period with weather and activity data)"
+            )
         return self
 
 
 # ---------------------------------------------------------------------------
-# Output: the itinerary the LLM must return
+# Output: the itinerary the agent must return
 # ---------------------------------------------------------------------------
 
-# Phase 3 – Step 0: weather for one day
+
+# Phase 2 – Step 1: weather for one day
 class Weather(BaseModel):
     temperature: float
     temperature_unit: str
     condition: str
 
 
-# Phase 3 – Step 0: one bookable activity (mirrors the mocked activities API)
+# Phase 2 – Step 1: one bookable activity (mirrors the mock activities API)
 class Activity(BaseModel):
     activity_id: str
     name: str
@@ -93,46 +111,46 @@ class Activity(BaseModel):
     location: str
     description: str
     price: int
-    related_interests: List[Interest]
+    related_interests: list[Interest]
 
 
-# Phase 3 – Step 0: an activity plus why the agent picked it
+# Phase 2 – Step 1: an activity plus why the agent picked it
 class ActivityRecommendation(BaseModel):
     activity: Activity
-    reasons_for_recommendation: List[str]
+    reasons_for_recommendation: list[str]
 
 
-# Phase 3 – Step 0: one day of the itinerary
+# Phase 2 – Step 1: one day of the itinerary
 class ItineraryDay(BaseModel):
     date: datetime.date
     weather: Weather
-    activity_recommendations: List[ActivityRecommendation]
+    activity_recommendations: list[ActivityRecommendation]
 
 
-# Phase 3 – Step 0: the complete plan returned by the itinerary agent
+# Phase 2 – Step 1: the complete plan returned by the agent's final_answer_tool
 class TravelPlan(BaseModel):
     city: str
     start_date: datetime.date
     end_date: datetime.date
-    total_cost: int
-    itinerary_days: List[ItineraryDay]
+    total_cost: int  # plain sum of activity prices (per group, not × travelers)
+    itinerary_days: list[ItineraryDay]
 
 
 # ---------------------------------------------------------------------------
 # Observability: what was sent to and received from the LLM
 # ---------------------------------------------------------------------------
 
-# Phase 3 – Step 5: one LLM run's inputs and outputs, shown in the prompt inspector
-# Phase 5 – B0 Step 3: plus trace_id and call metrics (latency, tokens, estimated cost)
+
+# Phase 2 – Step 1: one agent run's prompts, reply and metrics (used from Phase 6 on)
 class PromptTrace(BaseModel):
     trace_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     model: str
-    prompt_version: Optional[str] = None  # Phase 5 – B4 Step 1: which prompts/itinerary/<version>.md was used
+    prompt_version: str | None = None  # which prompts/itinerary/<version>.md was used
     system_prompt: str
     user_prompt: str
     raw_response: str
-    travel_plan: Optional[TravelPlan] = None  # None when the reply couldn't be parsed
-    latency_ms: Optional[float] = None
-    prompt_tokens: Optional[int] = None
-    completion_tokens: Optional[int] = None
-    cost_usd: Optional[float] = None
+    travel_plan: TravelPlan | None = None  # None when the reply couldn't be parsed
+    latency_ms: float | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    cost_usd: float | None = None

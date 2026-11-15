@@ -23,7 +23,6 @@ DEFAULT_MAX_RETRIES = 2
 PRICES_PER_1M_TOKENS: dict[str, tuple[float, float]] = {
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
-    "gpt-4.1-nano": (0.10, 0.40),
     "gpt-4o-mini": (0.15, 0.60),
 }
 
