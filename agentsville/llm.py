@@ -66,17 +66,22 @@ class LLMClient:
         )
 
     # Phase 0 – Step 5: send messages, time the call, return text + metrics
+    # Phase 4 – Step 4: optional JSON mode – the reply is guaranteed to be a JSON object
     def chat(
         self,
         messages: list[dict[str, str]],
         model: str | None = None,
         temperature: float = 0.0,
+        json_mode: bool = False,
     ) -> LLMResponse:
         model = model or self._default_model
+        extra: dict[str, Any] = {}
+        if json_mode:
+            extra["response_format"] = {"type": "json_object"}
         start = time.perf_counter()
         try:
             response = self._client.chat.completions.create(
-                model=model, messages=messages, temperature=temperature
+                model=model, messages=messages, temperature=temperature, **extra
             )
         except openai.OpenAIError as exc:
             raise LLMError(f"LLM call to '{model}' failed: {type(exc).__name__}: {exc}") from exc
