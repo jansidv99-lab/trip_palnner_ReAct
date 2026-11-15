@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 1. **Plan first:** before every step, write a detailed plan doc under `plan/` that explains each topic clearly. Keep plans organized by stage in numbered folders, e.g. `plan/00-master/`, `plan/01-vacation-info/`, `plan/02-tools/`.plans will have steps with clear purpose , output and dependence_on .
    Add new stage folders whenever needed, keeping the numeric prefix and never mixing topics.
+   Each stage's `plan.md` opens with a header: `Status:` (e.g. `DRAFT – awaiting review`), the proposed branch, a link to the master plan, and `Depends on:` earlier phases.
 2. **Review:** ask the user to review each plan doc before implementing it.
 3. **Permission:** always ask for permission before making any change to code.
 4. **Phased implementation:** start with the master plan, then plan the code phase by phase and step by step, stating each step's purpose and dependencies.
@@ -30,8 +31,9 @@ Python 3.11 in a local `.venv` (Windows paths shown; run everything from the rep
 ```bash
 py -3.11 -m venv .venv && .venv\Scripts\activate
 pip install -r requirements-dev.txt          # runtime deps + pytest + ruff
+copy .env.example .env                       # then fill in OPENAI_API_KEY etc.
 
-ruff check .                                 # lint (config in ruff.toml)
+ruff check .                                 # lint: line length 100, rules E,F,I,B,UP (data/data.py exempt from E501)
 pytest                                       # unit tests; `llm`-marked tests are skipped by default
 pytest tests/test_config.py::test_prompt_version_lowercased   # single test
 pytest -m llm                                # opt-in tests that call the real LLM (cost money)
@@ -39,11 +41,15 @@ python scripts/smoke_llm.py [model]          # manual check that key/endpoint/mo
 python scripts/run_agent.py [--sample rainy]  # real agent run, printed step by step
 python scripts/run_experiment.py --check-expected   # replay golden v1.0.0 (free) + repeatability check
 python scripts/run_experiment.py --mode record      # re-record cassettes after prompt/agent changes (~$0.20)
+python scripts/run_experiment.py --mode live --repeats 3   # fresh runs to measure variance (~$0.60)
 python scripts/compare_experiments.py experiments/A experiments/B
 python scripts/run_experiment.py --check-thresholds  # + evals/thresholds.toml verdicts (exit 4)
 python scripts/run_experiment.py --grade-mode record # replay agent, re-record grading only
+python scripts/run_experiment.py --update-expected   # code-grader change only: rewrite expected results ($0)
 python scripts/grade_runs.py experiments/<exp>      # grade stored runs (no agent re-run)
 python scripts/calibrate_judge.py --check-expected  # replay judge vs human labels
+python scripts/build_golden_dataset.py              # provenance script: builds a NEW golden version (bump version first)
+python scripts/build_calibration_dataset.py         # provenance script: builds a NEW calibration version
 ```
 
 CI (`.github/workflows/ci.yml`) runs two jobs on every PR and push to `main`: `lint` (`ruff check .`) and `test` (`pytest`). Both are required checks on `main`. `llm`-marked tests never run in CI, and CI uses no secrets.
@@ -105,11 +111,13 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
 - `agentsville/harness/` (Phase 7, B0): the Layer B experiment harness.
   - `dataset.py`: golden datasets in `evals/datasets/golden/<version>/` (`cases.jsonl`, `manifest.json`, `CHANGELOG.md`).
     - **Released versions are immutable.** `load_golden` verifies the cases' sha256 and a fingerprint of `data/data.py`, and refuses to load on a mismatch.
-    - Never edit a released version: run a new `scripts/build_golden_dataset.py`-style build for v1.1.0/v2.0.0.
+    - Never edit a released version: bump the version in `scripts/build_golden_dataset.py` (v1.1.0 for added cases, v2.0.0 for changed meaning) and add a CHANGELOG entry; `write_golden` refuses to overwrite.
     - Labels: `must_avoid_activity_ids`, `ambiguous_activity_ids`, `uncoverable_travelers`, `max_affordable_activities`, `expected_behavior`.
   - `recording.py`: `CassetteLLM(mode, cassette, llm, default_model)` is a drop-in for `LLMClient.chat`, with modes `live` | `record` | `replay`.
     - Keys are the sha256 of (model, LF-normalized messages, temperature, json_mode). A repeated request is stored per occurrence, and recorded LLM errors replay as `LLMError`.
     - A replay miss raises `CassetteMissError`, which means the prompt, agent code or data changed. Re-record with `--mode record` and commit the new cassettes.
+    - **Which refresh to use:** agent/prompt/data change → `--mode record` (~$0.20). Judge change → `--grade-mode record`. Code-grader or `CaseResult` change (no LLM requests change) → `--update-expected`: full replay only (refuses `--cases`, record/live modes), rewrites `expected_results.jsonl`, $0. Review that diff: only the intended fields should change.
+  - `schema.py`: `ExperimentConfig` and `CaseResult` (shared by runner, metrics and report), plus the `ROOT`, `CASSETTES_DIR` and `EXPERIMENTS_DIR` paths.
   - `runner.py`: `run_experiment(ExperimentConfig, ...)` runs cases × repeats in a thread pool, with one cassette per (case, repeat) under `evals/cassettes/golden-<ver>/<config_id>/`.
     - Record mode also writes `expected_results.jsonl`.
     - Outputs go to the git-ignored `experiments/<ts>__<config_id>/`: `config.json`, `results.jsonl`, `runs.jsonl`, `summary.json`, `report.md`.
@@ -118,12 +126,14 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
     - A run without a plan counts as a failure for every grader.
   - `report.py`: `render_report` builds the markdown report. `compare` refuses different dataset versions or hashes unless `force=True`, and calls a difference "likely real" only when the intervals don't overlap.
   - **Line endings matter:** `.gitattributes` forces LF for `prompts/**` and `evals/**`, and `prompts.py` LF-normalizes too. Hashes must match between Windows (`core.autocrlf=true`) and Linux CI.
-  - Harness tests use `tests/harness_fakes.py` (`ConversationFake`, `make_dataset`). The fake also answers both judges; the reasons judge flags any reason containing `UNGROUNDED`.
+  - Harness tests use `tests/harness_fakes.py` (`ConversationFake`, `make_dataset`). The fake also answers both judges; the reasons judge flags any reason containing `UNGROUNDED`. B2 graders, taxonomy, metrics, thresholds and signal are tested in `tests/test_constraints.py`.
 - **Run-level graders** (Phase 8, B1): `agentsville/harness/grading.py` + `agentsville/graders/`.
-  - A `RunGrader(name, kind, fn(run, llm))` grades a finished `AgentRun` and returns `GraderOutcome` (units / failed_units / counts / details).
-  - `grade_run` gives a run without a plan a failing outcome for every grader.
-  - Outcomes land in `CaseResult.grader_outcomes`; `ExperimentSummary.run_graders` holds micro unit rates and `.b1` the grounding headline.
-  - Judge calls during grading use their **own** cassette `<case>/r<n>.grading.jsonl`, separate from the agent's `r<n>.jsonl`. To change a judge, re-grade with `--grade-mode record` (agent replays), or use `scripts/grade_runs.py` on stored `experiments/*/runs.jsonl`. Never re-run the agent for that.
+  - A `RunGrader(name, kind, fn(run, ctx), needs_plan=True)` grades a finished `AgentRun` and returns `GraderOutcome` (units / failed_units / counts / details).
+  - `ctx` is a `GradingContext(llm, case)` (Phase 9): `ctx.llm` is set only for `kind="llm"` graders; `ctx.case` is the `GoldenCase` (labels) or `None` outside a dataset. Label-based graders return `not_applicable(...)` (passed, 0 units) when they can't apply. The runner and `grade_runs.py` pass the case.
+  - `grade_run` gives a run without a plan a failing outcome for every grader with `needs_plan=True`; `needs_plan=False` graders (`infeasible_handling`) judge plan-less runs themselves.
+  - Outcomes land in `CaseResult.grader_outcomes`; `ExperimentSummary.run_graders` holds micro unit rates, `.b1` the grounding headline and `.b2` the constraint headline.
+  - `ALL_GRADERS` in `agentsville/graders/__init__.py` = `B1_GRADERS + B2_GRADERS`; adding a grader there changes `CaseResult`, so refresh expected results with `--update-expected`.
+  - Judge calls during grading use their **own** cassette `<case>/r<n>.grading.jsonl`, separate from the agent's `r<n>.jsonl`. To change a judge, re-grade with `--grade-mode record` (agent replays), or use `scripts/grade_runs.py` on stored `experiments/*/runs.jsonl` (it also derives `failure_mode` / `final_rejections` for results stored before Phase 9). Never re-run the agent for that.
   - `runs.jsonl` lines are `{case_id, repeat, run}`; the B0 plain format is still readable.
 - `agentsville/graders/grounding.py` (B1, "is everything in the plan real?"):
   - **Code graders:**
@@ -136,13 +146,22 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
   - Human labels live in `evals/datasets/calibration/reasons/<version>/items.jsonl`, immutable like golden; `load_calibration` / `write_calibration`.
   - `harness/calibration.py` computes precision, recall, F1 and kappa, with **ungrounded as the positive class**.
   - The committed report is `evals/cassettes/calibration/reasons-v1.0.0/gpt-4.1__v1/report.json`.
-- **Thresholds:** `evals/thresholds.toml`, with rules `max_<metric>` / `min_<metric>`. `harness/thresholds.py` maps metric names to values. An unmeasured metric shows as `None`, never as a pass or a crash.
-- **Production-signal contract:** `graders/signals.py` `GroundingSignal` (`schema_version b1.v1`), spec in `plan/08-b1-grounding/production-signal.md`. Code graders run on every production run, and the judge on 10%.
+- `agentsville/graders/constraints.py` (Phase 9, B2, "does the plan satisfy the hard constraints?"), all code, no LLM:
+  - `weather_label_compliance`: planned activities on *really* inclement days (ambiguous ones skipped) vs the case's `must_avoid_activity_ids`.
+  - `infeasible_handling` (`needs_plan=False`): only for cases with `max_affordable_activities == 0`; passes on `final_answer` + empty plan + `total_cost == 0`.
+  - `budget_respected`: the actual price sum vs the budget (never the reported total).
+  - `weather_judge_agreement`: the in-loop weather judge's verdicts (parsed from `weather_suitability` details, `"<activity_id> on …"`) vs the human labels; counts `missed` / `false_alarm`.
+  - City/dates, cost accuracy and overlaps are **not** re-graded: `ConstraintMetrics` aggregates them from `CaseResult.eval_results`.
+- **Failure taxonomy** `agentsville/graders/completion.py`: `classify_failure(run)` → `None` (completed = final answer AND every error eval passed) or one `<category>:<detail>`, first matching rule wins: `llm_error:timeout|other` → `guardrail_exhausted:<eval>` → `final_failed:<eval>` → `invalid_args_loop:<tool>` (≥ 3 same-tool argument errors) → `eval_loop:<eval>` (≥ 2 `EVALS FAILED`, most frequent ✗) → `max_steps:other`. It parses observation text (`ERROR: invalid arguments for <tool>:`, `EVALS FAILED`, `✗ <eval>`), so changing those strings in `tools.py`/`evals.py` changes the taxonomy. Stored on `CaseResult.failure_mode` / `final_rejections`.
+- **B2 metrics** (`ConstraintMetrics`, `summary.b2`): violation rates are over **produced plans** (conditional); goal completion is over **all runs**. Also guardrail rejection, steps to completion, infeasible handled, judge-vs-label agreement and the failure-mode counts. `None` for results graded before B2. Findings: `plan/09-b2-constraints/b2-findings.md`.
+- **Thresholds:** `evals/thresholds.toml` (`[b1]`, `[b2]`), with rules `max_<metric>` / `min_<metric>`. `harness/thresholds.py` `METRICS` maps metric names to values; a rule whose metric isn't there shows as "unknown rule" (a test checks the committed file has none). An unmeasured metric shows as `None`, never as a pass or a crash.
+- **Production-signal contracts** (`graders/signals.py`, spec in `plan/08-b1-grounding/production-signal.md`):
+  - `GroundingSignal` (`b1.v1`): code graders on every production run, the reasons judge on 10%.
+  - `ConstraintSignal` (`b2.v1`), `constraint_signal(run)`: built from the run alone (no labels in production, so label graders stay offline), $0. `goal_completed` follows the harness rule; `constraints` is a dict of hard eval → passed.
 - Always read text files with `encoding="utf-8"`. The Windows default (cp1252) garbles the data's em dashes and curly quotes, and CI on Linux won't catch it.
 - `scripts/review_data.py` prints the data review tables. Findings and their implications for evals and the agent prompt are in `plan/03-data-access/data-review.md`.
 - `data/data.py`: raw mock data. Tools must not invent data beyond it.
   - `ACTIVITY_CALENDAR`: 24 activities in AgentsVille, 2025-06-10 to 2025-06-15. IDs follow `event-YYYY-MM-DD-N`; the hallucination eval checks plan activities against these IDs.
   - `WEATHER_FORECAST`: one entry per date.
   - `INCLIMATE_WEATHER_CONDITIONS = ["thunderstorm", "rainy"]`: drives the weather-suitability eval (outdoor activities on these days should be flagged).
-- Agent flow (planned): the LLM emits THOUGHT + a single ACTION tool call → Python parses it, runs the tool, returns an OBSERVATION string → repeat until the LLM calls `final_answer_tool`, whose payload is parsed into `TravelPlan`.
 

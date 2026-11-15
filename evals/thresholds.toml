@@ -16,3 +16,19 @@ max_ungrounded_reason_rate = 0.25
 # Judge trust bar – calibration v1.0.0: precision 1.00, recall 1.00, kappa 1.00 (32 reasons)
 min_judge_recall = 0.90
 min_judge_precision = 0.80
+
+# Phase 9 – Step 6: constraint compliance & goal completion. Measured on 36 live runs (golden
+# v1.0.0, gpt-4o-mini, prompt v1) – see plan/09-b2-constraints/b2-findings.md §5 (owner-approved).
+[b2]
+# Targets: today 0 violations in 28 plans [0–12%]; these constraints must stay ~0.
+max_city_dates_violation_rate = 0.05
+max_budget_violation_rate = 0.05
+max_overlap_violation_rate = 0.05
+max_weather_label_violation_rate = 0.05
+# Regression guard: measured 3.6% [1–18%] (1/28).
+max_cost_accuracy_violation_rate = 0.10
+# Regression guard: measured 72.2% [56–84%] live, 66.7% on the B0 recording CI replays.
+# Raise it when B4 fixes the cost loops (7 of 10 failures).
+min_goal_completion_rate = 0.60
+# Judge trust bar: weather judge vs human labels, measured 100% [89–100%] (30/30).
+min_weather_judge_agreement = 0.90

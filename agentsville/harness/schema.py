@@ -60,3 +60,6 @@ class CaseResult(BaseModel):
     judge_calls: int = 0
     error: str | None = None
     grader_outcomes: dict[str, GraderOutcome] = {}  # Phase 8: run-level graders (B1+)
+    # Phase 9 – Step 3: why the run didn't complete (None = completed) and guardrail rejections
+    failure_mode: str | None = None
+    final_rejections: int = 0

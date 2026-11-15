@@ -65,6 +65,30 @@ def test_run_without_plan_is_conservatively_failed(roots):
                                 base_llm=ConversationFake(["garbage"]), **roots)
     for r in results:
         assert r.stop_reason == "max_steps" and r.eval_results is None and not r.eval_passed
+        assert r.failure_mode == "max_steps:other"  # Phase 9: unparseable replies, no loop rule
+
+
+# Phase 9 – Step 8: the runner passes the case to graders and fills the B2 fields end to end
+def test_runner_produces_b2_outcomes_and_failure_modes(roots):
+    summary, results = run_experiment(config(mode="record"),
+                                      base_llm=ConversationFake(HAPPY_SCRIPT), **roots)
+    by_case = {r.case_id: r for r in results}
+    good, wrong_dates = by_case["g01-sample"], by_case["g02-rainy"]
+    b2_graders = {"weather_label_compliance", "infeasible_handling", "budget_respected",
+                  "weather_judge_agreement"}
+    assert b2_graders <= set(good.grader_outcomes)
+    # the case reached the label graders: g01 has one labeled storm-day pick (06-12)
+    assert good.grader_outcomes["weather_label_compliance"].units == 1
+    assert good.grader_outcomes["infeasible_handling"].details == [
+        "not applicable: feasible case"]
+    assert good.failure_mode is None and good.final_rejections == 0
+    # same plan for other dates: rejected twice by the guardrail, then accepted still failing
+    assert wrong_dates.failure_mode == "guardrail_exhausted:city_and_dates"
+    assert wrong_dates.final_rejections == 2
+    b2 = summary.b2
+    assert b2 is not None and b2.failure_modes == {"guardrail_exhausted:city_and_dates": 1}
+    assert (b2.violations["city_dates"].successes, b2.violations["city_dates"].n) == (1, 2)
+    assert (b2.guardrail_rejection.successes, b2.guardrail_rejection.n) == (1, 2)
 
 
 def test_repeats_use_separate_cassettes(roots):

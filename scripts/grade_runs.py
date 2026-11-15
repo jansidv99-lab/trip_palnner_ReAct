@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agentsville.agent import AgentRun  # noqa: E402
 from agentsville.config import ConfigError, get_settings  # noqa: E402
+from agentsville.graders.completion import classify_failure  # noqa: E402
 from agentsville.harness.calibration import load_committed_calibration  # noqa: E402
 from agentsville.harness.dataset import load_golden  # noqa: E402
 from agentsville.harness.metrics import summarize  # noqa: E402
@@ -75,12 +76,20 @@ def main() -> int:
 
     def grade(result):
         cassette = folder / "grading" / result.case_id / f"r{result.repeat}.grading.jsonl"
-        outcomes = grade_with_cassette(runs[(result.case_id, result.repeat)], args.mode, cassette,
-                                       base_llm, include_llm=not args.no_judge)
+        run = runs[(result.case_id, result.repeat)]
+        # Phase 9 – Step 1: pass the golden case so label-based graders can read it
+        outcomes = grade_with_cassette(run, args.mode, cassette,
+                                       base_llm, include_llm=not args.no_judge,
+                                       case=dataset.case(result.case_id))
         print(f"graded {result.case_id} r{result.repeat}: "
               + ", ".join(f"{n} {o.failed_units}/{o.units}" for n, o in outcomes.items()),
               flush=True)
-        return result.model_copy(update={"grader_outcomes": outcomes})
+        # Phase 9 – Step 3: stored B0/B1 results predate the failure taxonomy – derive it here
+        return result.model_copy(update={
+            "grader_outcomes": outcomes,
+            "failure_mode": classify_failure(run),
+            "final_rejections": run.final_rejections,
+        })
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         graded = list(pool.map(grade, results))

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from agentsville.agent import AgentRun, ItineraryAgent
 from agentsville.graders import ALL_GRADERS
+from agentsville.graders.completion import classify_failure
 from agentsville.graders.grounding import REASONS_JUDGE_MODEL
 from agentsville.harness.dataset import DATASETS_DIR, GoldenCase, GoldenDataset, load_golden
 from agentsville.harness.grading import GraderOutcome, RunGrader, grade_run
@@ -45,10 +46,13 @@ def result_from_run(
         judge_calls=run.judge_calls,
         error=run.error,
         grader_outcomes=grader_outcomes or {},
+        failure_mode=classify_failure(run),  # Phase 9 – Step 3
+        final_rejections=run.final_rejections,
     )
 
 
 # Phase 8 – Step 6: run-level graders with their OWN cassette (judges change without agent re-runs)
+# Phase 9 – Step 1: pass the golden case so label-based graders can read it
 def grade_with_cassette(
     run: AgentRun,
     mode: Mode,
@@ -56,12 +60,13 @@ def grade_with_cassette(
     base_llm: LLMClient | None,
     include_llm: bool,
     graders: list[RunGrader] = ALL_GRADERS,
+    case: GoldenCase | None = None,
 ) -> dict[str, GraderOutcome]:
     selected = [g for g in graders if include_llm or g.kind == "deterministic"]
     llm = None
     if any(g.kind == "llm" for g in selected):
         llm = CassetteLLM(mode, cassette, llm=base_llm, default_model=REASONS_JUDGE_MODEL)
-    return grade_run(run, selected, llm)
+    return grade_run(run, selected, llm, case=case)
 
 
 # Phase 7 – Step 4: one (case, repeat) through a cassette-backed agent
@@ -85,7 +90,7 @@ def run_case(
     run = agent.run(case.vacation_info)
     grading_cassette = cassette.with_name(f"r{repeat}.grading.jsonl")
     outcomes = grade_with_cassette(run, config.effective_grade_mode, grading_cassette, base_llm,
-                                   config.include_llm_evals)
+                                   config.include_llm_evals, case=case)
     return result_from_run(case.case_id, repeat, run, outcomes), run
 
 
@@ -135,6 +140,22 @@ def write_results(path: Path, results: list[CaseResult]) -> None:
     ordered = sorted(results, key=lambda r: (r.case_id, r.repeat))
     path.write_text("".join(r.model_dump_json() + "\n" for r in ordered),
                     encoding="utf-8", newline="\n")
+
+
+# Phase 9 – Step 4: refresh expected results after a grading-only change – $0, cassettes untouched.
+# Only a full replay is allowed: then the agent and judge calls are the recorded ones, so the only
+# differences are the new grader code – exactly what the diff of the expected file shows.
+def update_expected(
+    config: ExperimentConfig, results: list[CaseResult], cassette_root: Path = CASSETTES_DIR,
+) -> Path:
+    if config.mode != "replay" or config.effective_grade_mode != "replay":
+        raise ValueError("--update-expected needs a full replay (mode and grade mode 'replay'); "
+                         "record mode already rewrites the expected results")
+    if config.case_ids is not None:
+        raise ValueError("--update-expected must cover every case (don't pass --cases)")
+    path = config.cassette_dir(cassette_root) / EXPECTED_RESULTS_FILE
+    write_results(path, results)
+    return path
 
 
 def read_results(path: Path) -> list[CaseResult]:

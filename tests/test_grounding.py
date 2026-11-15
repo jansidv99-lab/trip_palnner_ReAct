@@ -16,7 +16,7 @@ from agentsville.graders.grounding import (
     weather_grounding,
 )
 from agentsville.graders.signals import grounding_signal
-from agentsville.harness.grading import grade_run
+from agentsville.harness.grading import GradingContext, RunGrader, grade_run, not_applicable
 from agentsville.llm import LLMError
 from agentsville.models import TravelPlan
 from agentsville.samples import sample_vacation_info
@@ -154,13 +154,13 @@ def test_reason_references_counts_reasons():
 
 def test_reasons_judge_one_call_per_activity():
     fake = ConversationFake([])
-    o = reasons_grounded(golden_run(), fake)
+    o = reasons_grounded(golden_run(), GradingContext(llm=fake))
     assert o.passed and o.units == 11 and fake.calls == 6
 
 
 def test_reasons_judge_flags_ungrounded():
     o = reasons_grounded(golden_run(mutated(reasons=["ok", "UNGROUNDED free lunch"])),
-                         ConversationFake([]))
+                         GradingContext(llm=ConversationFake([])))
     assert o.failed_units == 1 and "UNGROUNDED free lunch" in o.details[0]
 
 
@@ -184,7 +184,7 @@ class BrokenJudge:
     ],
 )
 def test_reasons_judge_fails_closed(judge, message):
-    o = reasons_grounded(golden_run(), judge)
+    o = reasons_grounded(golden_run(), GradingContext(llm=judge))
     assert o.failed_units == o.units == 11 and message in o.details[0]
 
 
@@ -200,6 +200,27 @@ def test_run_without_plan_fails_every_grader():
 def test_code_graders_never_receive_the_llm():
     outcomes = grade_run(golden_run(), B1_GRADERS, llm=ConversationFake([]))
     assert set(outcomes) == {g.name for g in B1_GRADERS}
+
+
+# Phase 9 – Step 1: every grader gets the case; only LLM graders get the llm
+def test_grading_context_carries_case_and_llm_only_to_llm_graders():
+    seen = {}
+
+    def spy(name, kind):
+        def fn(run, ctx):
+            seen[name] = ctx
+            return not_applicable(name, kind, "spy")
+        return RunGrader(name, kind, fn)
+
+    llm, case = object(), object()
+    grade_run(golden_run(), [spy("code", "deterministic"), spy("judge", "llm")], llm, case=case)
+    assert seen["code"].llm is None and seen["judge"].llm is llm
+    assert seen["code"].case is case and seen["judge"].case is case
+
+
+def test_not_applicable_passes_with_no_units():
+    o = not_applicable("weather_label_compliance", "deterministic", "no golden case")
+    assert o.passed and o.units == 0 and o.details == ["not applicable: no golden case"]
 
 
 # --- production signal ----------------------------------------------------------------------------
