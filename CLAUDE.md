@@ -53,10 +53,11 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
 - `agentsville/config.py`: `get_settings()` (cached) loads `.env` then real env vars (env wins) into a frozen `Settings`; raises `ConfigError` listing missing vars. `load_settings(mapping)` is the pure, testable core.
 - `agentsville/llm.py`: `LLMClient.chat()` is the **only** place that calls the OpenAI SDK. Returns `LLMResponse` (text, latency, tokens, estimated cost) and wraps all SDK failures in `LLMError`. Inject a fake via `LLMClient(settings, client=...)`. The Vocareum proxy accepts `gpt-4o-mini`, `gpt-4.1-mini`, `gpt-4.1`; `gpt-4.1-nano` returns 404.
 - `agentsville/models.py`: the single source of truth for data shapes, shared by the agent, tools, evals, and UI.
-  - Input: `VacationInfo` → `Traveler` → `Interest` (enum). Validators enforce departure ≥ arrival, budget > 0, and ≥ 1 interest per traveler.
+  - Input: `VacationInfo` → `Traveler` → `Interest` (enum). Validators enforce: ≥ 1 traveler, ≥ 1 interest each, age 0–120, budget > 0, departure ≥ arrival, both dates within `TRIP_WINDOW_START`–`TRIP_WINDOW_END` (2025-06-10 → 06-15), and destination = `SUPPORTED_DESTINATION` (any casing, normalized to "AgentsVille"). Duplicate traveler names are allowed by design. The window constants are fixed, and `tests/test_models.py` checks they match `data/data.py`.
   - Output: `TravelPlan` → `ItineraryDay` → `ActivityRecommendation` → `Activity` + `Weather`. The agent's `final_answer_tool` must produce JSON that validates as `TravelPlan`; `sample_plan.json` is a reference example.
   - `PromptTrace`: one LLM call's prompts, raw reply, parsed plan, latency, tokens, and cost. Used for observability (QA layer C).
-  - `OpenAIModel`: models selectable in the UI (gpt-4.1 / -mini / -nano).
+  - `OpenAIModel`: models selectable in the UI (`gpt-4o-mini` default, `gpt-4.1-mini`, `gpt-4.1`). Every member must have a price in `llm.PRICES_PER_1M_TOKENS` (enforced by a test). `config.MODEL` stays free-form.
+- `agentsville/samples.py`: factory functions returning fresh `VacationInfo` objects. `sample_vacation_info()` matches `sample_plan.json` (Yuri + Hiro, 06-10 → 06-12, budget 130); `tight_budget_vacation_info()` and `rainy_days_vacation_info()` cover edge cases.
 - `data/data.py`: mocked "APIs". Tools must read from here and must not invent data.
   - `ACTIVITY_CALENDAR`: 24 activities in AgentsVille, 2025-06-10 to 2025-06-15. IDs follow `event-YYYY-MM-DD-N`; the hallucination eval checks plan activities against these IDs.
   - `WEATHER_FORECAST`: one entry per date.

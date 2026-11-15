@@ -9,5 +9,3 @@ select = ["E", "F", "I", "B", "UP"]
 [lint.per-file-ignores]
 # Mock data has long human-written descriptions.
 "data/data.py" = ["E501"]
-# TEMPORARY: remove in Phase 2 – Step 1 (models.py comment cleanup + modern types).
-"agentsville/models.py" = ["E501", "I001", "UP006", "UP007", "UP035"]
