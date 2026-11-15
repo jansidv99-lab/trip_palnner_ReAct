@@ -1,0 +1,4 @@
+# Phase 0 – Step 2: development tools on top of the runtime dependencies
+-r requirements.txt
+pytest==8.3.5
+ruff==0.11.13
