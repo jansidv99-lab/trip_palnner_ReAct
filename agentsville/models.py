@@ -102,6 +102,14 @@ class Weather(BaseModel):
     condition: str
 
 
+# Phase 3 – Step 1: full forecast from the weather API – a Weather plus date, city, description.
+# The description feeds the LLM-judge weather eval; TravelPlan keeps the plain Weather shape.
+class WeatherForecast(Weather):
+    date: datetime.date
+    city: str
+    description: str
+
+
 # Phase 2 – Step 1: one bookable activity (mirrors the mock activities API)
 class Activity(BaseModel):
     activity_id: str

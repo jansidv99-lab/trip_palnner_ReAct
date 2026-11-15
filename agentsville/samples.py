@@ -1,5 +1,5 @@
 # Phase 2 – Step 4: shared sample trip requests for tests, evals, the agent and the eval suite.
-"""Each function returns a NEW VacationInfo, so callers can't affect each other."""
+"""Each function returns a NEW VacationInfo, so callers can't affect each other ."""
 
 import datetime
 
