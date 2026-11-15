@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from agentsville.harness.grading import GraderOutcome
 from agentsville.harness.recording import Mode
@@ -27,6 +27,23 @@ class ExperimentConfig(BaseModel):
     grade_mode: Mode | None = None  # Phase 8: grading cassettes; None = same as mode
     case_ids: list[str] | None = None  # None = every case in the dataset
     workers: int = Field(default=4, ge=1)
+    # Phase 10 – Step 1: record ONLY these LLM judges; every other judge replays its own cassette
+    record_graders: list[str] | None = None
+
+    # Phase 10 – Step 1: --record-graders decides per judge, so it can't be mixed with a grade mode
+    @model_validator(mode="after")
+    def _record_graders_need_replay(self) -> "ExperimentConfig":
+        if self.record_graders and self.grade_mode not in (None, "replay"):
+            raise ValueError("record_graders already sets each judge's mode; drop grade_mode")
+        if self.record_graders and self.mode == "live":
+            raise ValueError("record_graders can't be combined with live agent runs")
+        return self
+
+    # Phase 10 – Step 1: does this experiment call (and record with) a real LLM anywhere?
+    @property
+    def needs_llm(self) -> bool:
+        return (self.mode != "replay" or self.effective_grade_mode != "replay"
+                or bool(self.record_graders))
 
     # Phase 7 – Step 4: short id of the settings that define a cassette set
     @property

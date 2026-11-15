@@ -51,8 +51,30 @@ def result_from_run(
     )
 
 
+# Phase 10 – Step 1: the B1 judge keeps the original file name, so committed cassettes stay valid
+LEGACY_JUDGE_CASSETTE = "reasons_grounded"
+
+
+# Phase 10 – Step 1: each LLM judge records to its own file next to the run's grading cassette
+def judge_cassette(grading_cassette: Path, grader_name: str) -> Path:
+    if grader_name == LEGACY_JUDGE_CASSETTE:
+        return grading_cassette  # r<n>.grading.jsonl
+    stem = grading_cassette.name.removesuffix(".jsonl")
+    return grading_cassette.with_name(f"{stem}.{grader_name}.jsonl")  # r<n>.grading.<name>.jsonl
+
+
+# Phase 10 – Step 1: --record-graders may only name LLM judges that exist
+def validate_record_graders(names: list[str] | None, graders: list[RunGrader] = ALL_GRADERS):
+    judges = {g.name for g in graders if g.kind == "llm"}
+    unknown = sorted(set(names or []) - judges)
+    if unknown:
+        raise ValueError(f"unknown LLM judge(s) {', '.join(unknown)}; "
+                         f"choose from {', '.join(sorted(judges))}")
+
+
 # Phase 8 – Step 6: run-level graders with their OWN cassette (judges change without agent re-runs)
 # Phase 9 – Step 1: pass the golden case so label-based graders can read it
+# Phase 10 – Step 1: one cassette per LLM judge; record_graders records only those judges
 def grade_with_cassette(
     run: AgentRun,
     mode: Mode,
@@ -61,12 +83,18 @@ def grade_with_cassette(
     include_llm: bool,
     graders: list[RunGrader] = ALL_GRADERS,
     case: GoldenCase | None = None,
+    record_graders: list[str] | None = None,
 ) -> dict[str, GraderOutcome]:
     selected = [g for g in graders if include_llm or g.kind == "deterministic"]
-    llm = None
-    if any(g.kind == "llm" for g in selected):
-        llm = CassetteLLM(mode, cassette, llm=base_llm, default_model=REASONS_JUDGE_MODEL)
-    return grade_run(run, selected, llm, case=case)
+    outcomes = grade_run(run, [g for g in selected if g.kind == "deterministic"], case=case)
+    for grader in (g for g in selected if g.kind == "llm"):
+        judge_mode = mode
+        if record_graders is not None:
+            judge_mode = "record" if grader.name in record_graders else "replay"
+        llm = CassetteLLM(judge_mode, judge_cassette(cassette, grader.name), llm=base_llm,
+                          default_model=REASONS_JUDGE_MODEL)
+        outcomes |= grade_run(run, [grader], llm, case=case)
+    return {g.name: outcomes[g.name] for g in selected}  # keep the graders' order
 
 
 # Phase 7 – Step 4: one (case, repeat) through a cassette-backed agent
@@ -90,7 +118,8 @@ def run_case(
     run = agent.run(case.vacation_info)
     grading_cassette = cassette.with_name(f"r{repeat}.grading.jsonl")
     outcomes = grade_with_cassette(run, config.effective_grade_mode, grading_cassette, base_llm,
-                                   config.include_llm_evals, case=case)
+                                   config.include_llm_evals, case=case,
+                                   record_graders=config.record_graders)
     return result_from_run(case.case_id, repeat, run, outcomes), run
 
 
@@ -104,6 +133,7 @@ def run_experiment(
     dataset: GoldenDataset | None = None,
     on_result: Callable[[CaseResult, int, int], None] | None = None,  # (result, done, total)
 ) -> tuple[ExperimentSummary, list[CaseResult]]:
+    validate_record_graders(config.record_graders)
     dataset = dataset or load_golden(config.dataset_version, dataset_root)
     cases = dataset.cases
     if config.case_ids is not None:
@@ -127,7 +157,8 @@ def run_experiment(
     results = [result for result, _ in outputs]
     summary = summarize(config, dataset.manifest, results)
 
-    if "record" in (config.mode, config.effective_grade_mode):
+    # Phase 10 – Step 1: recording only some judges also changes the expected results
+    if "record" in (config.mode, config.effective_grade_mode) or config.record_graders:
         write_results(config.cassette_dir(cassette_root) / EXPECTED_RESULTS_FILE, results)
     if out_dir is not None:
         _write_artifacts(out_dir, config, summary, results, [run for _, run in outputs])
@@ -148,7 +179,7 @@ def write_results(path: Path, results: list[CaseResult]) -> None:
 def update_expected(
     config: ExperimentConfig, results: list[CaseResult], cassette_root: Path = CASSETTES_DIR,
 ) -> Path:
-    if config.mode != "replay" or config.effective_grade_mode != "replay":
+    if config.needs_llm:
         raise ValueError("--update-expected needs a full replay (mode and grade mode 'replay'); "
                          "record mode already rewrites the expected results")
     if config.case_ids is not None:

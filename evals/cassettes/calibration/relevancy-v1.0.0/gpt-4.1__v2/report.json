@@ -1,0 +1,12 @@
+{
+  "dataset": "calibration/relevancy v1.0.0",
+  "dataset_sha256": "76f2ff54fbdce6866b2293b993ad68f2f76c0bbb63953a31f2e9305420536482",
+  "judge_model": "gpt-4.1",
+  "judge_prompt_version": "v2",
+  "n": 25,
+  "exact": 1.0,
+  "within_1": 1.0,
+  "mae": 0.0,
+  "qwk": 1.0,
+  "disagreements": []
+}

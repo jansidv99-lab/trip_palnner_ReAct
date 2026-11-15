@@ -13,8 +13,8 @@ activities, calculator, evals), reads the results, and repeats until it returns 
 - Roadmap: [`plan/00-master/master-plan.md`](plan/00-master/master-plan.md)
 
 > Status: the ReAct agent works end to end from the command line. The eval harness (Phase 7 – B0),
-> grounding graders (Phase 8 – B1) and constraint & completion graders (Phase 9 – B2) are done.
-> The Streamlit UI comes in a later phase.
+> grounding (Phase 8 – B1), constraints & completion (Phase 9 – B2) and relevancy & reasoning
+> (Phase 10 – B3) evals are done. Next: the Streamlit UI and deployment to Cloud Run.
 
 ## Setup
 
@@ -55,9 +55,11 @@ Each experiment writes a `report.md` with goal completion and per-grader pass ra
 
 The B2 section answers "does the plan satisfy the traveler's hard constraints?": a violation rate per constraint (city/dates, budget, cost accuracy, overlaps, weather vs the LLM judge and vs human labels) over the plans produced, how often the guardrail had to reject a final answer, whether an impossible request (nothing affordable) gets a correct empty plan, how well the weather judge agrees with human labels, and a **failure taxonomy** explaining every run that didn't complete (for example `eval_loop:total_cost_accurate`). See [`plan/09-b2-constraints/b2-findings.md`](plan/09-b2-constraints/b2-findings.md).
 
+The B3 section answers "is the plan relevant to these travelers, and is its reasoning faithful?": a calibrated LLM judge scores how well each traveler is served relative to what was possible, code checks that the agent followed its procedure (weather and activities looked up for every day, the total computed by the calculator from the plan's own prices, the submitted plan verified first), and a second calibrated judge checks that every THOUGHT agrees with its ACTION. See [`plan/10-b3-relevancy-reasoning/b3-findings.md`](plan/10-b3-relevancy-reasoning/b3-findings.md).
+
 ```bash
 python scripts/grade_runs.py experiments/<exp>            # grade stored runs without re-running the agent
-python scripts/calibrate_judge.py --check-expected        # how well the judge agrees with human labels
+python scripts/calibrate_judge.py --check-expected        # how well each LLM judge agrees with human labels
 python scripts/run_experiment.py --check-thresholds       # pass/fail against evals/thresholds.toml
 python scripts/run_experiment.py --update-expected        # after a code-grader change: refresh expected results (free)
 ```
