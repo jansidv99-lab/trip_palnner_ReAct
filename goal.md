@@ -53,12 +53,54 @@ the itinerary agent, and displays the resulting `TravelPlan`.
 ## 8. AI Quality Assurance Platform
  three layers of quality checks
 
+Layer B is delivered as **end-to-end scenario slices**. Each slice
+answers one quality question, from golden data → graders → harness run → thresholds → CI →
+production signal (Layer C).
+
+
 | Layer | Question it answers | Weight |
 |---|---|---|
 | **A – Deterministic testing** | Does the software work? | minimal |
 | **B – Probabilistic evals** | Is the AI producing acceptable outcomes? | **main focus** |
 | **C – System metrics & drift monitoring** | Is it sustainable in production? | **main focus** |
 
+The slices map onto four competencies:
+- evaluation harnesses: hallucination rate, answer relevancy
+- agentic / reasoning validation
+- versioned golden datasets
+- observability and feedback loops
+
+### B0 – Foundation: harness, golden dataset v1.0.0, record/replay
+**Question:** can we run a repeatable experiment and get comparable numbers?
+
+### B1 – Hallucination & grounding
+**Question:** is everything in the plan real?
+
+### B2 – Constraint compliance & goal completion
+**Question:** does the plan satisfy the traveler's hard constraints?
+
+### B3 – Relevancy & reasoning verification
+**Question:** is the plan relevant to these travelers, and is its step-by-step reasoning faithful
+to the output?
+
+### B4 – Consistency, regression gating & eval-driven improvement
+**Question:** is quality stable across runs, and does a change actually improve it?
+
+### B5 – Production feedback loop & dataset lifecycle (the Layer B ↔ Layer C bridge)
+**Question:** how does production traffic make the evals better?
+
+
+## Scenario slices (execution order)
+
+
+
+
+
+| Layer C provides | Layer B uses it for | Needed by |
+|---|---|---|
+| **C1:** structured logging on Cloud Run + **log sink → BigQuery** | Querying production traces and feedback | **B5** |
+| C2: log-based metrics, dashboard | Watching online grader rates | after B2 |
+| C3: alert policies (drift, cost, errors) | Closing the loop on regressions in production | after B4 |
 
 ## incorporate feedback on the initial itinerary - keep it for next phase development 
     - This agent will also incorporate feedback on the initial itinerary from the travelers to ensure the final plan has at least 2 activities per day. A new evaluation function using a powerful LLM will be created to check this user feedback.
