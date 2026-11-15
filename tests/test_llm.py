@@ -42,3 +42,16 @@ def test_chat_wraps_sdk_errors(settings, fake_openai):
     fake = fake_openai(error=error)
     with pytest.raises(LLMError, match="APIConnectionError"):
         LLMClient(settings, client=fake).chat([{"role": "user", "content": "hi"}])
+
+
+# Phase 4 – Step 4: JSON mode adds response_format; default calls don't send it
+def test_json_mode_sets_response_format(settings, fake_openai):
+    fake = fake_openai(text='{"ok": true}')
+    LLMClient(settings, client=fake).chat([{"role": "user", "content": "hi"}], json_mode=True)
+    assert fake.calls[0]["response_format"] == {"type": "json_object"}
+
+
+def test_default_call_has_no_response_format(settings, fake_openai):
+    fake = fake_openai()
+    LLMClient(settings, client=fake).chat([{"role": "user", "content": "hi"}])
+    assert "response_format" not in fake.calls[0]

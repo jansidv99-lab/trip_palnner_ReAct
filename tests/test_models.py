@@ -58,7 +58,8 @@ def test_samples_return_new_objects():
 
 
 def test_sample_plan_json_parses_and_matches_sample_request():
-    plan = TravelPlan.model_validate_json((REPO_ROOT / "sample_plan.json").read_text())
+    plan_json = (REPO_ROOT / "sample_plan.json").read_text(encoding="utf-8")
+    plan = TravelPlan.model_validate_json(plan_json)
     request = sample_vacation_info()
     assert plan.city == request.destination
     assert (plan.start_date, plan.end_date) == (request.date_of_arrival, request.date_of_departure)
