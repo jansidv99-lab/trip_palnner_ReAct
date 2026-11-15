@@ -62,6 +62,22 @@ class DistStat(BaseModel):
         )
 
 
+# Phase 8 – Step 6: a run-level grader across an experiment – runs passed and unit failure rate
+class UnitStat(BaseModel):
+    runs_passed: RateStat  # runs where the grader passed ÷ all runs (no plan = fail)
+    unit_failure: RateStat  # failed units ÷ examined units (micro, pooled over runs)
+    counts: dict[str, int] = {}  # summed failure breakdown
+
+
+# Phase 8 – Step 6: the B1 headline numbers ("is everything in the plan real?")
+class GroundingMetrics(BaseModel):
+    activity_hallucination: RateStat  # fabricated/altered/wrong-day activities ÷ planned activities
+    plan_hallucination: RateStat  # plans with any activity or weather hallucination ÷ plans
+    trajectory_ungrounded: RateStat  # used-but-never-retrieved activities/days ÷ units
+    reason_reference_errors: RateStat  # reasons naming unknown travelers / wrong interests
+    ungrounded_reasons: RateStat | None = None  # LLM judge; None when the judge didn't run
+
+
 # Phase 7 – Step 5: everything an experiment report and a comparison need
 class ExperimentSummary(BaseModel):
     config: ExperimentConfig
@@ -77,6 +93,43 @@ class ExperimentSummary(BaseModel):
     cost_usd: DistStat
     steps: DistStat
     latency_s: DistStat
+    run_graders: dict[str, UnitStat] = {}  # Phase 8
+    b1: GroundingMetrics | None = None  # Phase 8
+
+
+# Phase 8 – Step 6: pool one run-level grader over all results
+def _unit_stat(results: list[CaseResult], name: str) -> UnitStat:
+    outcomes = [r.grader_outcomes.get(name) for r in results]
+    counts: Counter = Counter()
+    for o in outcomes:
+        if o:
+            counts.update(o.counts)
+    return UnitStat(
+        runs_passed=RateStat.of(sum(bool(o and o.passed) for o in outcomes), len(results)),
+        unit_failure=RateStat.of(sum(o.failed_units for o in outcomes if o),
+                                 sum(o.units for o in outcomes if o)),
+        counts=dict(counts),
+    )
+
+
+# Phase 8 – Step 6: B1 metrics; plan-level rate counts only runs that produced a plan
+def _grounding(results: list[CaseResult], stats: dict[str, UnitStat]) -> GroundingMetrics | None:
+    if "activity_grounding" not in stats:
+        return None
+    planned = [r for r in results if r.eval_results is not None and r.grader_outcomes]
+    hallucinated = sum(
+        any(not o.passed for name, o in r.grader_outcomes.items()
+            if name in ("activity_grounding", "weather_grounding"))
+        for r in planned
+    )
+    judge = stats.get("reasons_grounded")
+    return GroundingMetrics(
+        activity_hallucination=stats["activity_grounding"].unit_failure,
+        plan_hallucination=RateStat.of(hallucinated, len(planned)),
+        trajectory_ungrounded=stats["trajectory_grounding"].unit_failure,
+        reason_reference_errors=stats["reason_references"].unit_failure,
+        ungrounded_reasons=judge.unit_failure if judge else None,
+    )
 
 
 # Phase 7 – Step 5: aggregate the results of one experiment
@@ -97,6 +150,10 @@ def summarize(
         )
         for case_id in sorted({r.case_id for r in results})
     }
+    run_graders = {
+        name: _unit_stat(results, name)
+        for name in sorted({g for r in results for g in r.grader_outcomes})
+    }
     return ExperimentSummary(
         config=config,
         dataset_version=manifest.version,
@@ -111,4 +168,6 @@ def summarize(
         cost_usd=DistStat.of([r.cost_usd for r in results]),
         steps=DistStat.of([float(r.steps) for r in results]),
         latency_s=DistStat.of([r.latency_ms / 1000 for r in results]),
+        run_graders=run_graders,
+        b1=_grounding(results, run_graders),
     )

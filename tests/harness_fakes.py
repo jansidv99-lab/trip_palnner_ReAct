@@ -5,6 +5,7 @@ from datetime import date
 from pathlib import Path
 
 from agentsville.evals import WEATHER_JUDGE_PROMPT
+from agentsville.graders.grounding import reasons_judge_prompt
 from agentsville.harness.dataset import GoldenCase, GoldenLabels, write_golden
 from agentsville.llm import LLMError, LLMResponse
 from agentsville.samples import rainy_days_vacation_info, sample_vacation_info
@@ -15,6 +16,14 @@ GOLDEN_PLAN = json.loads((REPO_ROOT / "sample_plan.json").read_text(encoding="ut
 
 def action(tool_name: str, **arguments) -> str:
     return json.dumps({"thought": "t", "action": {"tool_name": tool_name, "arguments": arguments}})
+
+
+# Phase 8 – Step 11: fake reasons-judge reply – grounded unless the reason contains a flag word
+def reasons_verdict(user_message: str, flag: str = "UNGROUNDED") -> str:
+    reasons = user_message.split("REASONS:\n", 1)[1].splitlines()
+    verdicts = [{"index": n, "grounded": flag not in r, "unsupported_claim": "" if flag not in r
+                 else "flagged"} for n, r in enumerate(reasons, start=1)]
+    return json.dumps({"reasons": verdicts})
 
 
 # Phase 7 – Step 9: stands in for LLMClient – the reply depends only on the conversation, so
@@ -36,6 +45,10 @@ class ConversationFake:
             return LLMResponse(text='{"suitable": true, "reason": "ok"}', model="judge",
                                latency_ms=2.0, prompt_tokens=40, completion_tokens=8,
                                cost_usd=0.002)
+        if messages[0]["content"] == reasons_judge_prompt():
+            return LLMResponse(text=reasons_verdict(messages[1]["content"]), model="judge",
+                               latency_ms=3.0, prompt_tokens=200, completion_tokens=30,
+                               cost_usd=0.003)
         step = sum(m["role"] == "assistant" for m in messages)
         text = self.script[min(step, len(self.script) - 1)]  # keep repeating the last reply
         return LLMResponse(text=text, model=model or self.default_model, latency_ms=10.0,

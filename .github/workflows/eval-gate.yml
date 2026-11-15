@@ -1,4 +1,5 @@
 # Phase 7 – Step 8: Layer B eval job – replay the committed cassettes and prove repeatability.
+# Phase 8 – Step 9: + judge calibration replay and the B1 threshold report.
 # No secrets and no LLM cost: every response comes from evals/cassettes/. Informational for now;
 # B4 (Phase 11) adds thresholds/baselines and makes it a required check.
 name: Evals
@@ -6,11 +7,11 @@ name: Evals
 on:
   pull_request:
     branches: [main]
-    paths: ["agentsville/**", "prompts/**", "evals/**", "data/**", "scripts/run_experiment.py",
+    paths: ["agentsville/**", "prompts/**", "evals/**", "data/**", "scripts/run_experiment.py", "scripts/calibrate_judge.py",
             ".github/workflows/eval-gate.yml"]
   push:
     branches: [main]
-    paths: ["agentsville/**", "prompts/**", "evals/**", "data/**", "scripts/run_experiment.py",
+    paths: ["agentsville/**", "prompts/**", "evals/**", "data/**", "scripts/run_experiment.py", "scripts/calibrate_judge.py",
             ".github/workflows/eval-gate.yml"]
   workflow_dispatch:
 
@@ -44,6 +45,15 @@ jobs:
       # replayed results differ from the recorded expected_results.jsonl.
       - name: Replay golden v1.0.0 and check repeatability
         run: python scripts/run_experiment.py --mode replay --check-expected --out experiments/ci
+
+      # Phase 8 – Step 9: the reasons judge must reproduce its committed calibration report
+      - name: Replay judge calibration (B1)
+        run: python scripts/calibrate_judge.py --mode replay --check-expected
+
+      # Phase 8 – Step 9: threshold verdicts are shown, not yet blocking (B4 makes them required)
+      - name: Thresholds report (informational until B4)
+        continue-on-error: true
+        run: python scripts/run_experiment.py --mode replay --check-thresholds --out experiments/ci
 
       - name: Upload experiment report
         if: always()

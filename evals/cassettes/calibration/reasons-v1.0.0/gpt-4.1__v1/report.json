@@ -1,0 +1,17 @@
+{
+  "dataset": "calibration/reasons v1.0.0",
+  "dataset_sha256": "365adb594dfbf9fac5fbe1e95d127429dde63e691522979b61e4208174ae4ed0",
+  "judge_model": "gpt-4.1",
+  "judge_prompt_version": "v1",
+  "n": 32,
+  "tp": 12,
+  "fp": 0,
+  "tn": 20,
+  "fn": 0,
+  "precision": 1.0,
+  "recall": 1.0,
+  "f1": 1.0,
+  "accuracy": 1.0,
+  "kappa": 1.0,
+  "disagreements": []
+}

@@ -1,0 +1,18 @@
+# Phase 8 – Step 7: quality thresholds. Rules: max_<metric> (value ≤ limit) or min_<metric> (≥).
+# Reported by `run_experiment.py --check-thresholds`; informational until B4 (Phase 11) makes them
+# blocking. Values are set from measured evidence – see plan/08-b1-grounding/b1-findings.md.
+
+[b1]
+# Data grounding – measured on 36 live runs (golden v1.0.0, gpt-4o-mini, prompt v1):
+# activity 1.0% [0–5%], plan 3.6% [1–18%], trajectory 0.6% [0–3%], reason references 7.9% [4–14%]
+max_activity_hallucination_rate = 0.05
+max_plan_hallucination_rate = 0.10
+max_trajectory_ungrounded_rate = 0.05
+max_reason_reference_error_rate = 0.10
+# Claim grounding – measured 19.3% [13–27%]. Set as a REGRESSION GUARD just above today's upper
+# CI (owner decision): it accepts the current level and catches it getting worse. Tighten it when
+# B4's prompt v2 lowers the rate.
+max_ungrounded_reason_rate = 0.25
+# Judge trust bar – calibration v1.0.0: precision 1.00, recall 1.00, kappa 1.00 (32 reasons)
+min_judge_recall = 0.90
+min_judge_precision = 0.80

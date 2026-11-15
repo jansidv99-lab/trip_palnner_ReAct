@@ -6,6 +6,8 @@
     python scripts/run_experiment.py --mode record           # call the LLM, (re)write cassettes
     python scripts/run_experiment.py --mode live --repeats 3 # explore variance, store nothing
     python scripts/run_experiment.py --cases g01-sample-yuri-hiro,g07-infeasible-budget
+    python scripts/run_experiment.py --grade-mode record      # replay agent, re-record grading only
+    python scripts/run_experiment.py --check-thresholds       # + evals/thresholds.toml verdicts
 """
 
 import argparse
@@ -16,7 +18,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agentsville.config import ConfigError, get_settings  # noqa: E402
+from agentsville.harness.calibration import load_committed_calibration  # noqa: E402
 from agentsville.harness.recording import CassetteMissError  # noqa: E402
+from agentsville.harness.report import render_report  # noqa: E402
 from agentsville.harness.runner import (  # noqa: E402
     EXPECTED_RESULTS_FILE,
     compare_with_expected,
@@ -28,6 +32,7 @@ from agentsville.harness.schema import (  # noqa: E402
     CaseResult,
     ExperimentConfig,
 )
+from agentsville.harness.thresholds import check_thresholds, thresholds_passed  # noqa: E402
 from agentsville.llm import LLMClient  # noqa: E402
 
 
@@ -53,21 +58,26 @@ def main() -> int:
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--no-judge", action="store_true", help="skip the LLM weather judge")
     parser.add_argument("--mode", choices=["live", "record", "replay"], default="replay")
+    parser.add_argument("--grade-mode", choices=["live", "record", "replay"],
+                        help="mode for grading (judge) cassettes; default: same as --mode")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--cases", help="comma-separated case ids (default: all)")
     parser.add_argument("--out", type=Path, help="output folder (default: experiments/<ts>__<id>)")
     parser.add_argument("--check-expected", action="store_true",
                         help="fail unless results equal the recorded expected_results.jsonl")
+    parser.add_argument("--check-thresholds", action="store_true",
+                        help="add evals/thresholds.toml verdicts to the report; exit 4 on failure")
     args = parser.parse_args()
 
     config = ExperimentConfig(
         dataset_version=args.dataset, model=args.model, prompt_version=args.prompt,
         temperature=args.temperature, repeats=args.repeats, max_steps=args.max_steps,
-        include_llm_evals=not args.no_judge, mode=args.mode, workers=args.workers,
+        include_llm_evals=not args.no_judge, mode=args.mode, grade_mode=args.grade_mode,
+        workers=args.workers,
         case_ids=args.cases.split(",") if args.cases else None,
     )
     base_llm = None
-    if config.mode != "replay":
+    if config.mode != "replay" or config.effective_grade_mode != "replay":
         try:
             base_llm = LLMClient(get_settings())
         except ConfigError as exc:
@@ -101,6 +111,18 @@ def main() -> int:
             print("REPEATABILITY CHECK FAILED:\n  " + "\n  ".join(differences))
             return 3
         print(f"repeatability check passed: {len(results)} runs identical to the recording")
+
+    if args.check_thresholds:
+        thresholds = check_thresholds(summary, load_committed_calibration())
+        (out / "report.md").write_text(render_report(summary, results, thresholds),
+                                       encoding="utf-8")
+        for t in thresholds:
+            verdict = {True: "pass", False: "FAIL", None: "not measured"}[t.passed]
+            value = "—" if t.value is None else f"{t.value:.3f}"
+            print(f"threshold {t.section}.{t.rule} ≤/≥ {t.limit:g}: {value} → {verdict}")
+        if not thresholds_passed(thresholds):
+            print("THRESHOLDS FAILED – see the report")
+            return 4
     return 0
 
 

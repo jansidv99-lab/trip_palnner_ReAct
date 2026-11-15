@@ -6,9 +6,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from agentsville.agent import AgentRun, ItineraryAgent
+from agentsville.graders import ALL_GRADERS
+from agentsville.graders.grounding import REASONS_JUDGE_MODEL
 from agentsville.harness.dataset import DATASETS_DIR, GoldenCase, GoldenDataset, load_golden
+from agentsville.harness.grading import GraderOutcome, RunGrader, grade_run
 from agentsville.harness.metrics import ExperimentSummary, summarize
-from agentsville.harness.recording import CassetteLLM
+from agentsville.harness.recording import CassetteLLM, Mode
 from agentsville.harness.schema import CASSETTES_DIR, CaseResult, ExperimentConfig
 from agentsville.llm import LLMClient
 
@@ -16,7 +19,10 @@ EXPECTED_RESULTS_FILE = "expected_results.jsonl"
 
 
 # Phase 7 – Step 4: the graded, deterministic outcome of one agent run
-def result_from_run(case_id: str, repeat: int, run: AgentRun) -> CaseResult:
+def result_from_run(
+    case_id: str, repeat: int, run: AgentRun,
+    grader_outcomes: dict[str, GraderOutcome] | None = None,
+) -> CaseResult:
     report = run.final_eval_report
     failures = []
     if report is not None:
@@ -38,7 +44,24 @@ def result_from_run(case_id: str, repeat: int, run: AgentRun) -> CaseResult:
         latency_ms=round(run.total_latency_ms, 3),
         judge_calls=run.judge_calls,
         error=run.error,
+        grader_outcomes=grader_outcomes or {},
     )
+
+
+# Phase 8 – Step 6: run-level graders with their OWN cassette (judges change without agent re-runs)
+def grade_with_cassette(
+    run: AgentRun,
+    mode: Mode,
+    cassette: Path,
+    base_llm: LLMClient | None,
+    include_llm: bool,
+    graders: list[RunGrader] = ALL_GRADERS,
+) -> dict[str, GraderOutcome]:
+    selected = [g for g in graders if include_llm or g.kind == "deterministic"]
+    llm = None
+    if any(g.kind == "llm" for g in selected):
+        llm = CassetteLLM(mode, cassette, llm=base_llm, default_model=REASONS_JUDGE_MODEL)
+    return grade_run(run, selected, llm)
 
 
 # Phase 7 – Step 4: one (case, repeat) through a cassette-backed agent
@@ -60,7 +83,10 @@ def run_case(
         log_path=None,
     )
     run = agent.run(case.vacation_info)
-    return result_from_run(case.case_id, repeat, run), run
+    grading_cassette = cassette.with_name(f"r{repeat}.grading.jsonl")
+    outcomes = grade_with_cassette(run, config.effective_grade_mode, grading_cassette, base_llm,
+                                   config.include_llm_evals)
+    return result_from_run(case.case_id, repeat, run, outcomes), run
 
 
 # Phase 7 – Step 4: dataset × config × repeats → results, summary and stored artifacts
@@ -96,7 +122,7 @@ def run_experiment(
     results = [result for result, _ in outputs]
     summary = summarize(config, dataset.manifest, results)
 
-    if config.mode == "record":
+    if "record" in (config.mode, config.effective_grade_mode):
         write_results(config.cassette_dir(cassette_root) / EXPECTED_RESULTS_FILE, results)
     if out_dir is not None:
         _write_artifacts(out_dir, config, summary, results, [run for _, run in outputs])
@@ -138,6 +164,9 @@ def _write_artifacts(out_dir, config, summary, results, runs) -> None:
     (out_dir / "summary.json").write_text(summary.model_dump_json(indent=2), encoding="utf-8")
     write_results(out_dir / "results.jsonl", results)
     with (out_dir / "runs.jsonl").open("w", encoding="utf-8", newline="\n") as f:
-        for run in runs:
-            f.write(json.dumps(json.loads(run.model_dump_json()), ensure_ascii=False) + "\n")
+        # Phase 8 – Step 6: each run carries its case id and repeat, so it can be re-graded later
+        for result, run in zip(results, runs, strict=True):
+            record = {"case_id": result.case_id, "repeat": result.repeat,
+                      "run": json.loads(run.model_dump_json())}
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
     (out_dir / "report.md").write_text(render_report(summary, results), encoding="utf-8")
