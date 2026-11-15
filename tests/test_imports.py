@@ -8,7 +8,7 @@ def test_models_import():
 
 
 def test_activity_calendar_has_24_activities():
-    assert len(ACTIVITY_CALENDAR) == 24
+    assert len(ACTIVITY_CALENDAR) == 25  # DEMO: deliberately wrong, never merge
 
 
 def test_weather_forecast_covers_six_days():
