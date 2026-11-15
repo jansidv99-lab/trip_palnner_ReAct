@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 2. **Review:** ask the user to review each plan doc before implementing it.
 3. **Permission:** always ask for permission before making any change to code.
 4. **Phased implementation:** start with the master plan, then plan the code phase by phase and step by step, stating each step's purpose and dependencies.
-5. **Commits, PRs, merges:** always ask for permission before every commit, branch creation ,pull request, and merge.
+5. **Commits, new branch creation PRs, merges:** always ask for permission before every commit, new branch creation ,pull request, and merge.
 6. **Branch naming:** use professional, descriptive names prefixed by type, e.g. `feature/streamlit-itinerary-form`, `fix/llm-timeout-handling`, `bugfix/date-parsing`, `chore/cloudrun-dockerfile`, `docs/master-plan`.
 7. **Phase comments in code:** mark which phase/step produced the code, at the top of each new file and on each new function/class, for future reference:
    ```python
