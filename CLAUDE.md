@@ -58,7 +58,14 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
   - `PromptTrace`: one LLM call's prompts, raw reply, parsed plan, latency, tokens, and cost. Used for observability (QA layer C).
   - `OpenAIModel`: models selectable in the UI (`gpt-4o-mini` default, `gpt-4.1-mini`, `gpt-4.1`). Every member must have a price in `llm.PRICES_PER_1M_TOKENS` (enforced by a test). `config.MODEL` stays free-form.
 - `agentsville/samples.py`: factory functions returning fresh `VacationInfo` objects. `sample_vacation_info()` matches `sample_plan.json` (Yuri + Hiro, 06-10 → 06-12, budget 130); `tight_budget_vacation_info()` and `rainy_days_vacation_info()` cover edge cases.
-- `data/data.py`: mocked "APIs". Tools must read from here and must not invent data.
+- `agentsville/data_api.py`: the mock weather and activity API, and the **only** module that reads `data/data.py`. Evals, tools and the agent must go through it.
+  - Functions: `get_weather`, `get_activities`, `get_weather_for_range`, `get_activities_for_range`, `get_activity_by_id`, `is_inclement`.
+  - Dates can be `date` objects or ISO strings; city matching is case-insensitive.
+  - "Not found" returns `None` / `[]` (no exception). Range functions raise `ValueError` if start > end.
+  - Lookup tables are built once with `functools.cache`; results are deep copies, so callers can't change the cached data.
+  - Returns `WeatherForecast`, which is `Weather` plus `date`, `city` and `description`. The description feeds the LLM-judge weather eval; `TravelPlan` still uses plain `Weather`.
+- `scripts/review_data.py` prints the data review tables. Findings and their implications for evals and the agent prompt are in `plan/03-data-access/data-review.md`.
+- `data/data.py`: raw mock data. Tools must not invent data beyond it.
   - `ACTIVITY_CALENDAR`: 24 activities in AgentsVille, 2025-06-10 to 2025-06-15. IDs follow `event-YYYY-MM-DD-N`; the hallucination eval checks plan activities against these IDs.
   - `WEATHER_FORECAST`: one entry per date.
   - `INCLIMATE_WEATHER_CONDITIONS = ["thunderstorm", "rainy"]`: drives the weather-suitability eval (outdoor activities on these days should be flagged).
