@@ -71,6 +71,16 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
   - Pass `include_llm=False` for free, offline runs; unit tests use a `FakeLLM` in `tests/test_evals.py`.
   - The judge's calibration cases live in `tests/test_evals_live.py` (`pytest -m llm`).
   - `scripts/run_evals.py [--no-llm] [--plan FILE]` prints a report against `sample_vacation_info()`.
+- `agentsville/tools.py`: the agent's tools. `build_default_registry()` returns a `ToolRegistry` with 7 tools: `calculator_tool`, `get_weather_for_date_tool`, `get_activities_by_date_tool`, `get_activity_by_id_tool`, `filter_activities_by_interest_tool`, `run_evals_tool` and `final_answer_tool`.
+  - `registry.execute(name, arguments, ToolContext)` returns a `ToolResult` (`observation`, `is_error`, `is_final`, `travel_plan`).
+  - It **never raises**: unknown tools, Pydantic argument errors and exceptions inside a tool become `ERROR: …` observations.
+  - Data observations are compact JSON with every model field, so the agent can copy them verbatim (eval E4).
+  - `ToolContext` carries `vacation_info`, `llm` and `include_llm_evals`, the run-specific inputs `run_evals_tool` needs.
+  - `final_answer_tool` is the only tool that sets `is_final=True`.
+  - The calculator uses an AST whitelist (`safe_eval`), never `eval()`.
+  - `registry.catalog()` renders the tool list for the system prompt. `travel_plan` arguments refer to a TravelPlan schema the prompt must include.
+  - **To add a tool:** define a Pydantic args model and a `(args, context) -> ToolResult` function, then add a `Tool(...)` entry in `build_default_registry()`.
+  - `scripts/try_tools.py [--catalog] [--llm]` runs sample ACTIONs through the registry.
 - Always read text files with `encoding="utf-8"`. The Windows default (cp1252) garbles the data's em dashes and curly quotes, and CI on Linux won't catch it.
 - `scripts/review_data.py` prints the data review tables. Findings and their implications for evals and the agent prompt are in `plan/03-data-access/data-review.md`.
 - `data/data.py`: raw mock data. Tools must not invent data beyond it.
