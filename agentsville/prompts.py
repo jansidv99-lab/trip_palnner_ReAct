@@ -31,7 +31,9 @@ def render_prompt(name: str, version: str, values: dict[str, str]) -> str:
         raise PromptError(
             f"no prompt '{name}/{version}'. Available: {', '.join(available_versions(name))}"
         )
-    text = _HTML_COMMENT.sub("", path.read_text(encoding="utf-8"))
+    # Phase 7 – Step 3: LF-normalize so a CRLF checkout (Windows) sends the same prompt as Linux
+    raw = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    text = _HTML_COMMENT.sub("", raw)
     for key, value in values.items():
         text = text.replace("{{" + key + "}}", value)
     leftover = _PLACEHOLDER.findall(text)

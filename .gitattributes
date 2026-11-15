@@ -1,0 +1,4 @@
+# Phase 7 – Step 6: prompts and eval artifacts are hashed (cassette keys, dataset checksums),
+# so they must have identical bytes on every OS – always LF, regardless of core.autocrlf.
+prompts/** text eol=lf
+evals/** text eol=lf
