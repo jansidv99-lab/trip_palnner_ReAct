@@ -71,7 +71,9 @@ def test_repeats_use_separate_cassettes(roots):
     run_experiment(config(mode="record", repeats=2), base_llm=ConversationFake(HAPPY_SCRIPT),
                    **roots)
     case_dir = config().cassette_dir(roots["cassette_root"]) / "g01-sample"
-    assert sorted(p.name for p in case_dir.iterdir()) == ["r1.jsonl", "r2.jsonl"]
+    assert sorted(p.name for p in case_dir.iterdir()) == [
+        "r1.grading.jsonl", "r1.jsonl", "r2.grading.jsonl", "r2.jsonl"
+    ]  # Phase 8: agent and grading cassettes are separate files
 
 
 def test_case_subset_and_unknown_ids(roots):
@@ -184,3 +186,27 @@ def test_on_result_reports_every_run(roots):
     assert [(r.case_id, r.repeat) for r in results] == [
         ("g01-sample", 1), ("g01-sample", 2), ("g02-rainy", 1), ("g02-rainy", 2)
     ]  # results stay in task order even though callbacks arrive in completion order
+
+
+# Phase 8 – Step 11: re-grading replays the agent and re-records ONLY the grading cassettes
+def test_regrade_leaves_agent_cassettes_untouched(roots):
+    fake = ConversationFake(HAPPY_SCRIPT)
+    run_experiment(config(mode="record"), base_llm=fake, **roots)
+    case_dir = config().cassette_dir(roots["cassette_root"]) / "g01-sample"
+    agent_bytes = (case_dir / "r1.jsonl").read_bytes()
+
+    summary, results = run_experiment(config(mode="replay", grade_mode="record"), base_llm=fake,
+                                      **roots)
+    assert (case_dir / "r1.jsonl").read_bytes() == agent_bytes
+    assert (case_dir / "r1.grading.jsonl").stat().st_size > 0
+    good = next(r for r in results if r.case_id == "g01-sample")
+    assert good.grader_outcomes["activity_grounding"].passed
+    assert good.grader_outcomes["reasons_grounded"].units == 11
+    assert summary.b1 is not None and summary.b1.activity_hallucination.successes == 0
+
+
+def test_no_judge_skips_llm_graders(roots):
+    _, results = run_experiment(config(mode="record", include_llm_evals=False),
+                                base_llm=ConversationFake(HAPPY_SCRIPT), **roots)
+    assert "reasons_grounded" not in results[0].grader_outcomes
+    assert "activity_grounding" in results[0].grader_outcomes

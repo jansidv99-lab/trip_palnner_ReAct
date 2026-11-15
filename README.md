@@ -49,7 +49,13 @@ python scripts/run_experiment.py --mode live --repeats 3   # fresh runs to see v
 python scripts/compare_experiments.py experiments/<A> experiments/<B>
 ```
 
-Each experiment writes a `report.md` with goal completion and per-grader pass rates (with 95% confidence intervals), cost, steps and latency.
+Each experiment writes a `report.md` with goal completion and per-grader pass rates (with 95% confidence intervals), cost, steps and latency. It also includes the B1 grounding section: activity and plan hallucination rates, trajectory grounding, reason references, and ungrounded reasons from the calibrated LLM judge.
+
+```bash
+python scripts/grade_runs.py experiments/<exp>            # grade stored runs without re-running the agent
+python scripts/calibrate_judge.py --check-expected        # how well the judge agrees with human labels
+python scripts/run_experiment.py --check-thresholds       # pass/fail against evals/thresholds.toml
+```
 
 ## Tests and lint
 

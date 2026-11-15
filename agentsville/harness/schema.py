@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from agentsville.harness.grading import GraderOutcome
 from agentsville.harness.recording import Mode
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -23,6 +24,7 @@ class ExperimentConfig(BaseModel):
     max_steps: int = Field(default=20, ge=1)
     include_llm_evals: bool = True
     mode: Mode = "replay"
+    grade_mode: Mode | None = None  # Phase 8: grading cassettes; None = same as mode
     case_ids: list[str] | None = None  # None = every case in the dataset
     workers: int = Field(default=4, ge=1)
 
@@ -33,6 +35,11 @@ class ExperimentConfig(BaseModel):
         if not self.include_llm_evals:
             raw += "__nojudge"
         return re.sub(r"[^A-Za-z0-9_.-]", "-", raw)
+
+    # Phase 8 – Step 6: agent and grader recordings are independent (re-grade without re-running)
+    @property
+    def effective_grade_mode(self) -> Mode:
+        return self.grade_mode or self.mode
 
     def cassette_dir(self, root: Path = CASSETTES_DIR) -> Path:
         return root / f"golden-{self.dataset_version}" / self.config_id
@@ -52,3 +59,4 @@ class CaseResult(BaseModel):
     latency_ms: float = 0.0
     judge_calls: int = 0
     error: str | None = None
+    grader_outcomes: dict[str, GraderOutcome] = {}  # Phase 8: run-level graders (B1+)

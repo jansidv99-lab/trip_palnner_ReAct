@@ -40,11 +40,16 @@ python scripts/run_agent.py [--sample rainy]  # real agent run, printed step by 
 python scripts/run_experiment.py --check-expected   # replay golden v1.0.0 (free) + repeatability check
 python scripts/run_experiment.py --mode record      # re-record cassettes after prompt/agent changes (~$0.20)
 python scripts/compare_experiments.py experiments/A experiments/B
+python scripts/run_experiment.py --check-thresholds  # + evals/thresholds.toml verdicts (exit 4)
+python scripts/run_experiment.py --grade-mode record # replay agent, re-record grading only
+python scripts/grade_runs.py experiments/<exp>      # grade stored runs (no agent re-run)
+python scripts/calibrate_judge.py --check-expected  # replay judge vs human labels
 ```
 
 CI (`.github/workflows/ci.yml`) runs two jobs on every PR and push to `main`: `lint` (`ruff check .`) and `test` (`pytest`). Both are required checks on `main`. `llm`-marked tests never run in CI, and CI uses no secrets.
 `.github/workflows/eval-gate.yml` (`Evals / eval-replay`, informational until Phase 11) replays the
-committed cassettes and fails if replayed results differ from `expected_results.jsonl`. Run both locally before committing.
+committed cassettes and fails if replayed results differ from `expected_results.jsonl`. It
+also replays the judge calibration, and shows threshold verdicts (`continue-on-error` until B4). Run both locally before committing.
 
 `pytest.ini` sets `pythonpath = .`, registers the `llm` marker and skips it by default. Tests never touch the network unless marked `@pytest.mark.llm`; unit tests use `FakeOpenAIClient` from `tests/conftest.py` and `load_settings({...})` instead of the real `.env`.
 
@@ -113,7 +118,26 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
     - A run without a plan counts as a failure for every grader.
   - `report.py`: `render_report` builds the markdown report. `compare` refuses different dataset versions or hashes unless `force=True`, and calls a difference "likely real" only when the intervals don't overlap.
   - **Line endings matter:** `.gitattributes` forces LF for `prompts/**` and `evals/**`, and `prompts.py` LF-normalizes too. Hashes must match between Windows (`core.autocrlf=true`) and Linux CI.
-  - Harness tests use `tests/harness_fakes.py` (`ConversationFake`, `make_dataset`).
+  - Harness tests use `tests/harness_fakes.py` (`ConversationFake`, `make_dataset`). The fake also answers both judges; the reasons judge flags any reason containing `UNGROUNDED`.
+- **Run-level graders** (Phase 8, B1): `agentsville/harness/grading.py` + `agentsville/graders/`.
+  - A `RunGrader(name, kind, fn(run, llm))` grades a finished `AgentRun` and returns `GraderOutcome` (units / failed_units / counts / details).
+  - `grade_run` gives a run without a plan a failing outcome for every grader.
+  - Outcomes land in `CaseResult.grader_outcomes`; `ExperimentSummary.run_graders` holds micro unit rates and `.b1` the grounding headline.
+  - Judge calls during grading use their **own** cassette `<case>/r<n>.grading.jsonl`, separate from the agent's `r<n>.jsonl`. To change a judge, re-grade with `--grade-mode record` (agent replays), or use `scripts/grade_runs.py` on stored `experiments/*/runs.jsonl`. Never re-run the agent for that.
+  - `runs.jsonl` lines are `{case_id, repeat, run}`; the B0 plain format is still readable.
+- `agentsville/graders/grounding.py` (B1, "is everything in the plan real?"):
+  - **Code graders:**
+    - `activity_grounding`: fabricated / altered (with a `first_difference` snippet) / wrong_day.
+    - `weather_grounding`: each day's weather against the forecast.
+    - `trajectory_grounding`: every planned activity and day's weather must appear in a non-error tool observation.
+    - `reason_references`: possessive names must be travelers, and the interests claimed must be theirs.
+  - **LLM judge** `reasons_grounded`: `gpt-4.1`, one call per activity, prompt in `prompts/judges/reasons_grounded/v1.md`. It fails closed.
+- **Judge calibration:**
+  - Human labels live in `evals/datasets/calibration/reasons/<version>/items.jsonl`, immutable like golden; `load_calibration` / `write_calibration`.
+  - `harness/calibration.py` computes precision, recall, F1 and kappa, with **ungrounded as the positive class**.
+  - The committed report is `evals/cassettes/calibration/reasons-v1.0.0/gpt-4.1__v1/report.json`.
+- **Thresholds:** `evals/thresholds.toml`, with rules `max_<metric>` / `min_<metric>`. `harness/thresholds.py` maps metric names to values. An unmeasured metric shows as `None`, never as a pass or a crash.
+- **Production-signal contract:** `graders/signals.py` `GroundingSignal` (`schema_version b1.v1`), spec in `plan/08-b1-grounding/production-signal.md`. Code graders run on every production run, and the judge on 10%.
 - Always read text files with `encoding="utf-8"`. The Windows default (cp1252) garbles the data's em dashes and curly quotes, and CI on Linux won't catch it.
 - `scripts/review_data.py` prints the data review tables. Findings and their implications for evals and the agent prompt are in `plan/03-data-access/data-review.md`.
 - `data/data.py`: raw mock data. Tools must not invent data beyond it.
