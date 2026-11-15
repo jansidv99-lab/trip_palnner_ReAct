@@ -12,7 +12,7 @@ activities, calculator, evals), reads the results, and repeats until it returns 
 - Requirements: [`goal.md`](goal.md)
 - Roadmap: [`plan/00-master/master-plan.md`](plan/00-master/master-plan.md)
 
-> Status: **Phase 0 – Foundations** (config, LLM client, tests). The agent and UI come in later phases.
+> Status: **Phase 6 – ReAct agent** works end to end from the command line. The Streamlit UI comes in Phase 8.
 
 ## Setup
 
@@ -31,6 +31,16 @@ copy .env.example .env              # then fill in OPENAI_API_KEY (macOS/Linux: 
 python scripts/smoke_llm.py         # one tiny LLM call: prints reply, latency, tokens, est. cost
 ```
 
+## Run the agent
+
+```bash
+python scripts/run_agent.py                  # plan the sample trip, printing every THOUGHT / ACTION / OBSERVATION
+python scripts/run_agent.py --sample rainy   # a harder trip on the rainy days
+python scripts/run_evals.py                  # evaluate sample_plan.json
+```
+
+Each run is appended to `logs/agent_runs.jsonl` and typically costs 1–3 cents.
+
 ## Tests and lint
 
 ```bash
@@ -44,7 +54,8 @@ The same lint and unit tests run in CI (GitHub Actions) on every pull request an
 ## Project layout
 
 ```
-agentsville/   application code (config, LLM client, models; later evals, tools, agent)
+agentsville/   application code (config, LLM client, models, data API, evals, tools, agent)
+prompts/       versioned system prompts (prompts/itinerary/v1.md)
 data/          mock activity and weather data (the "APIs")
 scripts/       manual helper scripts
 tests/         pytest suite

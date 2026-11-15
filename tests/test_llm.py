@@ -55,3 +55,8 @@ def test_default_call_has_no_response_format(settings, fake_openai):
     fake = fake_openai()
     LLMClient(settings, client=fake).chat([{"role": "user", "content": "hi"}])
     assert "response_format" not in fake.calls[0]
+
+
+# Phase 6 – Step 2: default_model is exposed so runs can record which model they used
+def test_default_model_exposed(settings, fake_openai):
+    assert LLMClient(settings, client=fake_openai()).default_model == "gpt-4o-mini"

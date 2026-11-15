@@ -1,7 +1,6 @@
 # Phase 2 – Step 1: Pydantic data models shared by the agent, tools, evals and UI.
 
 import datetime
-import uuid
 from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -144,21 +143,4 @@ class TravelPlan(BaseModel):
     itinerary_days: list[ItineraryDay]
 
 
-# ---------------------------------------------------------------------------
-# Observability: what was sent to and received from the LLM
-# ---------------------------------------------------------------------------
-
-
-# Phase 2 – Step 1: one agent run's prompts, reply and metrics (used from Phase 6 on)
-class PromptTrace(BaseModel):
-    trace_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    model: str
-    prompt_version: str | None = None  # which prompts/itinerary/<version>.md was used
-    system_prompt: str
-    user_prompt: str
-    raw_response: str
-    travel_plan: TravelPlan | None = None  # None when the reply couldn't be parsed
-    latency_ms: float | None = None
-    prompt_tokens: int | None = None
-    completion_tokens: int | None = None
-    cost_usd: float | None = None
+# Phase 6 – Step 4: run traces moved to agentsville/agent.py (AgentStep, AgentRun).
