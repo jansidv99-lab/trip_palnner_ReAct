@@ -11,6 +11,14 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from agentsville.agent import AgentRun
+from agentsville.harness.dataset import GoldenCase
+
+
+# Phase 9 – Step 1: everything a grader may read besides the run itself
+@dataclass(frozen=True)
+class GradingContext:
+    llm: Any = None  # judge client; None for code graders
+    case: GoldenCase | None = None  # golden labels; None when grading outside a dataset
 
 
 # Phase 8 – Step 1: the outcome of one grader on one run, counted in units (activities, reasons…)
@@ -24,12 +32,15 @@ class GraderOutcome(BaseModel):
     details: list[str] = []
 
 
-# Phase 8 – Step 1: a named grader; fn(run, llm) -> GraderOutcome (llm is None for code graders)
+# Phase 8 – Step 1: a named grader
+# Phase 9 – Step 1: fn(run, ctx) -> GraderOutcome (ctx.llm is None for code graders)
 @dataclass(frozen=True)
 class RunGrader:
     name: str
     kind: Literal["deterministic", "llm"]
-    fn: Callable[[AgentRun, Any], GraderOutcome]
+    fn: Callable[[AgentRun, GradingContext], GraderOutcome]
+    # Phase 9 – Step 2: False = the grader judges runs without a plan itself (infeasible handling)
+    needs_plan: bool = True
 
 
 # Phase 8 – Step 1: build an outcome from examined/failed units
@@ -48,14 +59,23 @@ def outcome(
     )
 
 
+# Phase 9 – Step 1: outcome for a label-based grader when it can't apply (no case, no units)
+def not_applicable(name: str, kind: Literal["deterministic", "llm"], why: str) -> GraderOutcome:
+    return GraderOutcome(name=name, kind=kind, passed=True, details=[f"not applicable: {why}"])
+
+
 # Phase 8 – Step 1: apply graders to one run; a run without a plan fails every grader (B0 rule)
-def grade_run(run: AgentRun, graders: list[RunGrader], llm: Any = None) -> dict[str, GraderOutcome]:
+# Phase 9 – Step 1: graders get a GradingContext; only LLM graders see the llm
+def grade_run(
+    run: AgentRun, graders: list[RunGrader], llm: Any = None, case: GoldenCase | None = None,
+) -> dict[str, GraderOutcome]:
     results = {}
     for grader in graders:
-        if run.travel_plan is None:
+        if run.travel_plan is None and grader.needs_plan:
             results[grader.name] = GraderOutcome(
                 name=grader.name, kind=grader.kind, passed=False, details=["no plan produced"]
             )
         else:
-            results[grader.name] = grader.fn(run, llm if grader.kind == "llm" else None)
+            ctx = GradingContext(llm=llm if grader.kind == "llm" else None, case=case)
+            results[grader.name] = grader.fn(run, ctx)
     return results

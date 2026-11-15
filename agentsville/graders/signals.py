@@ -1,4 +1,5 @@
 # Phase 8 – Step 10: production-signal contract for B1 – what C1 (Phase 14) logs per production run.
+# Phase 9 – Step 7: B2 signal (constraints & completion) added.
 """Spec: plan/08-b1-grounding/production-signal.md. Code graders run on EVERY production run; the
 reasons judge runs on a sample (default 10%) to control cost, so `ungrounded_reasons` is None for
 unsampled runs and C2 rates over judged runs only.
@@ -6,6 +7,8 @@ unsampled runs and C2 rates over judged runs only.
 
 from pydantic import BaseModel
 
+from agentsville.agent import AgentRun, StopReason
+from agentsville.graders.completion import classify_failure
 from agentsville.harness.grading import GraderOutcome
 
 JUDGE_SAMPLE_RATE = 0.10
@@ -44,4 +47,38 @@ def grounding_signal(outcomes: dict[str, GraderOutcome], judge_sampled: bool) ->
         reason_reference_errors=references.failed_units if references else 0,
         judge_sampled=judge is not None,
         ungrounded_reasons=judge.failed_units if judge else None,
+    )
+
+
+# Phase 9 – Step 7: one production run's constraint & completion outcome (flat, stable log schema).
+# Built from the run alone – production has no golden labels, so label-based graders don't apply.
+class ConstraintSignal(BaseModel):
+    schema_version: str = "b2.v1"
+    stop_reason: StopReason | None
+    plan_produced: bool
+    goal_completed: bool  # final answer AND every hard (error) eval passed
+    failure_mode: str | None  # failure taxonomy label; None when completed
+    steps: int
+    final_rejections: int  # guardrail rejections before the final answer
+    constraints: dict[str, bool]  # hard eval → passed (in-loop final evals); {} without a plan
+    budget: int
+    total_cost: int | None  # the plan's reported total; None without a plan
+
+
+# Phase 9 – Step 7: build the signal from a finished run
+def constraint_signal(run: AgentRun) -> ConstraintSignal:
+    report = run.final_eval_report
+    results = report.results if report else []
+    constraints = {r.name: r.passed for r in results if r.severity == "error"}
+    failure_mode = classify_failure(run)
+    return ConstraintSignal(
+        stop_reason=run.stop_reason,
+        plan_produced=run.travel_plan is not None,
+        goal_completed=failure_mode is None,
+        failure_mode=failure_mode,
+        steps=run.step_count,
+        final_rejections=run.final_rejections,
+        constraints=constraints,
+        budget=run.vacation_info.budget,
+        total_cost=run.travel_plan.total_cost if run.travel_plan else None,
     )

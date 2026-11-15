@@ -8,6 +8,8 @@
     python scripts/run_experiment.py --cases g01-sample-yuri-hiro,g07-infeasible-budget
     python scripts/run_experiment.py --grade-mode record      # replay agent, re-record grading only
     python scripts/run_experiment.py --check-thresholds       # + evals/thresholds.toml verdicts
+    python scripts/run_experiment.py --update-expected        # rewrite expected results after a
+                                                              # grading-only change (replay, $0)
 """
 
 import argparse
@@ -26,6 +28,7 @@ from agentsville.harness.runner import (  # noqa: E402
     compare_with_expected,
     read_results,
     run_experiment,
+    update_expected,
 )
 from agentsville.harness.schema import (  # noqa: E402
     EXPERIMENTS_DIR,
@@ -67,6 +70,9 @@ def main() -> int:
                         help="fail unless results equal the recorded expected_results.jsonl")
     parser.add_argument("--check-thresholds", action="store_true",
                         help="add evals/thresholds.toml verdicts to the report; exit 4 on failure")
+    # Phase 9 – Step 4: refresh expected_results.jsonl when only grading changed (cassettes kept)
+    parser.add_argument("--update-expected", action="store_true",
+                        help="replay only: rewrite expected_results.jsonl with these results")
     args = parser.parse_args()
 
     config = ExperimentConfig(
@@ -76,6 +82,14 @@ def main() -> int:
         workers=args.workers,
         case_ids=args.cases.split(",") if args.cases else None,
     )
+    if args.update_expected and args.check_expected:
+        print("use either --update-expected or --check-expected, not both")
+        return 1
+    if args.update_expected and (config.mode != "replay" or config.effective_grade_mode != "replay"
+                                 or config.case_ids is not None):
+        print("--update-expected needs a full replay: no --mode/--grade-mode other than replay, "
+              "no --cases")
+        return 1
     base_llm = None
     if config.mode != "replay" or config.effective_grade_mode != "replay":
         try:
@@ -101,6 +115,10 @@ def main() -> int:
     print(f"report: {out / 'report.md'}")
     if config.mode == "record":
         print(f"cassettes + {EXPECTED_RESULTS_FILE}: {config.cassette_dir()}")
+
+    if args.update_expected:
+        path = update_expected(config, results)
+        print(f"expected results rewritten: {path} – review the diff before committing")
 
     if args.check_expected:
         expected = read_results(config.cassette_dir() / EXPECTED_RESULTS_FILE)

@@ -78,6 +78,31 @@ class GroundingMetrics(BaseModel):
     ungrounded_reasons: RateStat | None = None  # LLM judge; None when the judge didn't run
 
 
+# Phase 9 – Step 4: in-loop hard evals (Phase 4) that B2 aggregates, plus its own run-level graders
+IN_LOOP_CONSTRAINTS = {
+    "city_dates": "city_and_dates",
+    "cost_accuracy": "total_cost_accurate",
+    "overlap": "no_overlapping_activities",
+    "weather_judge": "weather_suitability",
+}
+
+
+# Phase 9 – Step 4: the B2 numbers ("does the plan satisfy the hard constraints?")
+class ConstraintMetrics(BaseModel):
+    # violation rates (lower is better) over PRODUCED plans – conditional on answering
+    violations: dict[str, RateStat]  # city_dates, cost_accuracy, overlap, budget, weather_judge
+    weather_label_violations: RateStat  # must-avoid picks ÷ labeled inclement-day picks (units)
+    all_hard_pass: RateStat  # plans passing every error eval ÷ plans (higher is better)
+    # completion picture over ALL runs – unconditional
+    failure_modes: dict[str, int]  # "<category>:<detail>" → runs, for non-completed runs
+    guardrail_rejection: RateStat  # final-answer runs with ≥ 1 rejection ÷ final-answer runs
+    steps_to_completion: DistStat  # completed runs only
+    infeasible_handled: RateStat | None = None  # passed ÷ infeasible-case runs (None: no such case)
+    weather_judge_agreement: RateStat | None = None  # judge = label ÷ labeled units judged
+    judge_missed: int = 0  # label must-avoid, judge said suitable
+    judge_false_alarms: int = 0  # judge flagged, label says suitable
+
+
 # Phase 7 – Step 5: everything an experiment report and a comparison need
 class ExperimentSummary(BaseModel):
     config: ExperimentConfig
@@ -95,6 +120,7 @@ class ExperimentSummary(BaseModel):
     latency_s: DistStat
     run_graders: dict[str, UnitStat] = {}  # Phase 8
     b1: GroundingMetrics | None = None  # Phase 8
+    b2: ConstraintMetrics | None = None  # Phase 9
 
 
 # Phase 8 – Step 6: pool one run-level grader over all results
@@ -129,6 +155,46 @@ def _grounding(results: list[CaseResult], stats: dict[str, UnitStat]) -> Groundi
         trajectory_ungrounded=stats["trajectory_grounding"].unit_failure,
         reason_reference_errors=stats["reason_references"].unit_failure,
         ungrounded_reasons=judge.unit_failure if judge else None,
+    )
+
+
+# Phase 9 – Step 4: passed units ÷ units (the flip of unit_failure); None when nothing was examined
+def _passed_units(stat: UnitStat | None) -> RateStat | None:
+    if stat is None or stat.unit_failure.n == 0:
+        return None
+    return RateStat.of(stat.unit_failure.n - stat.unit_failure.successes, stat.unit_failure.n)
+
+
+# Phase 9 – Step 4: B2 metrics; None for results graded before B2 (no budget_respected outcome)
+def _constraints(results: list[CaseResult], stats: dict[str, UnitStat]) -> ConstraintMetrics | None:
+    if "budget_respected" not in stats:
+        return None
+    plans = [r for r in results if r.eval_results is not None]
+    violations = {}
+    for key, eval_name in IN_LOOP_CONSTRAINTS.items():
+        judged = [r for r in plans if eval_name in r.eval_results]
+        if judged:  # weather_judge is absent when the judge was off
+            violations[key] = RateStat.of(sum(not r.eval_results[eval_name] for r in judged),
+                                          len(judged))
+    over = [r for r in plans if "budget_respected" in r.grader_outcomes]
+    violations["budget"] = RateStat.of(
+        sum(not r.grader_outcomes["budget_respected"].passed for r in over), len(over))
+
+    finals = [r for r in results if r.stop_reason == "final_answer"]
+    completed = [r for r in results if r.stop_reason == "final_answer" and r.eval_passed]
+    agreement = stats.get("weather_judge_agreement")
+    return ConstraintMetrics(
+        violations=dict(sorted(violations.items())),
+        weather_label_violations=stats["weather_label_compliance"].unit_failure,
+        all_hard_pass=RateStat.of(sum(r.eval_passed for r in plans), len(plans)),
+        failure_modes=dict(Counter(r.failure_mode for r in results if r.failure_mode)
+                           .most_common()),
+        guardrail_rejection=RateStat.of(sum(r.final_rejections > 0 for r in finals), len(finals)),
+        steps_to_completion=DistStat.of([float(r.steps) for r in completed]),
+        infeasible_handled=_passed_units(stats.get("infeasible_handling")),
+        weather_judge_agreement=_passed_units(agreement),
+        judge_missed=agreement.counts.get("missed", 0) if agreement else 0,
+        judge_false_alarms=agreement.counts.get("false_alarm", 0) if agreement else 0,
     )
 
 
@@ -170,4 +236,5 @@ def summarize(
         latency_s=DistStat.of([r.latency_ms / 1000 for r in results]),
         run_graders=run_graders,
         b1=_grounding(results, run_graders),
+        b2=_constraints(results, run_graders),
     )

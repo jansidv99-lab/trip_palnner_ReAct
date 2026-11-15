@@ -12,7 +12,9 @@ activities, calculator, evals), reads the results, and repeats until it returns 
 - Requirements: [`goal.md`](goal.md)
 - Roadmap: [`plan/00-master/master-plan.md`](plan/00-master/master-plan.md)
 
-> Status: **Phase 6 – ReAct agent** works end to end from the command line. The Streamlit UI comes in Phase 8.
+> Status: the ReAct agent works end to end from the command line. The eval harness (Phase 7 – B0),
+> grounding graders (Phase 8 – B1) and constraint & completion graders (Phase 9 – B2) are done.
+> The Streamlit UI comes in a later phase.
 
 ## Setup
 
@@ -51,10 +53,13 @@ python scripts/compare_experiments.py experiments/<A> experiments/<B>
 
 Each experiment writes a `report.md` with goal completion and per-grader pass rates (with 95% confidence intervals), cost, steps and latency. It also includes the B1 grounding section: activity and plan hallucination rates, trajectory grounding, reason references, and ungrounded reasons from the calibrated LLM judge.
 
+The B2 section answers "does the plan satisfy the traveler's hard constraints?": a violation rate per constraint (city/dates, budget, cost accuracy, overlaps, weather vs the LLM judge and vs human labels) over the plans produced, how often the guardrail had to reject a final answer, whether an impossible request (nothing affordable) gets a correct empty plan, how well the weather judge agrees with human labels, and a **failure taxonomy** explaining every run that didn't complete (for example `eval_loop:total_cost_accurate`). See [`plan/09-b2-constraints/b2-findings.md`](plan/09-b2-constraints/b2-findings.md).
+
 ```bash
 python scripts/grade_runs.py experiments/<exp>            # grade stored runs without re-running the agent
 python scripts/calibrate_judge.py --check-expected        # how well the judge agrees with human labels
 python scripts/run_experiment.py --check-thresholds       # pass/fail against evals/thresholds.toml
+python scripts/run_experiment.py --update-expected        # after a code-grader change: refresh expected results (free)
 ```
 
 ## Tests and lint

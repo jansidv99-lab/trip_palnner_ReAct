@@ -13,7 +13,7 @@ from pydantic import BaseModel, ValidationError
 
 from agentsville.agent import AgentRun
 from agentsville.data_api import get_activity_by_id, get_weather
-from agentsville.harness.grading import GraderOutcome, RunGrader, outcome
+from agentsville.harness.grading import GraderOutcome, GradingContext, RunGrader, outcome
 from agentsville.llm import LLMError
 from agentsville.models import Activity, Interest, ItineraryDay, Traveler, WeatherForecast
 from agentsville.prompts import render_prompt
@@ -51,7 +51,7 @@ def first_difference(planned: str, source: str, context: int = 25) -> str:
 
 
 # Phase 8 – Step 2: every planned activity exists, matches the source exactly and sits on its day
-def activity_grounding(run: AgentRun, llm=None) -> GraderOutcome:
+def activity_grounding(run: AgentRun, ctx: GradingContext | None = None) -> GraderOutcome:
     problems, counts, units = [], {"fabricated": 0, "altered": 0, "wrong_day": 0}, 0
     for day, activity, _ in _planned(run):
         units += 1
@@ -76,7 +76,7 @@ def activity_grounding(run: AgentRun, llm=None) -> GraderOutcome:
 
 
 # Phase 8 – Step 2: each day's weather equals the forecast for that date
-def weather_grounding(run: AgentRun, llm=None) -> GraderOutcome:
+def weather_grounding(run: AgentRun, ctx: GradingContext | None = None) -> GraderOutcome:
     problems = []
     days = run.travel_plan.itinerary_days
     for day in days:
@@ -114,7 +114,7 @@ def _observed(run: AgentRun) -> tuple[set[str], set[str]]:
 
 
 # Phase 8 – Step 2: the agent actually retrieved every activity and day's weather it used
-def trajectory_grounding(run: AgentRun, llm=None) -> GraderOutcome:
+def trajectory_grounding(run: AgentRun, ctx: GradingContext | None = None) -> GraderOutcome:
     seen_activities, seen_weather = _observed(run)
     problems, counts = [], {"activity_not_retrieved": 0, "weather_not_retrieved": 0}
     days = run.travel_plan.itinerary_days
@@ -155,7 +155,7 @@ def check_reason_references(reason: str, travelers: list[Traveler]) -> list[str]
 
 
 # Phase 8 – Step 2: cheap pattern check of the reasons against the request
-def reason_references(run: AgentRun, llm=None) -> GraderOutcome:
+def reason_references(run: AgentRun, ctx: GradingContext | None = None) -> GraderOutcome:
     travelers = run.vacation_info.travelers
     problems, units, failed = [], 0, 0
     for _, activity, reasons in _planned(run):
@@ -241,12 +241,12 @@ def judge_reasons(
 
 
 # Phase 8 – Step 4: LLM judge – every claim in every reason is supported by the provided facts
-def reasons_grounded(run: AgentRun, llm) -> GraderOutcome:
+def reasons_grounded(run: AgentRun, ctx: GradingContext) -> GraderOutcome:
     travelers = run.vacation_info.travelers
     problems, units, failed = [], 0, 0
     for day, activity, reasons in _planned(run):
         source = get_activity_by_id(activity.activity_id) or activity
-        verdicts = judge_reasons(llm, source, get_weather(day.date), travelers, reasons)
+        verdicts = judge_reasons(ctx.llm, source, get_weather(day.date), travelers, reasons)
         for reason, verdict in zip(reasons, verdicts, strict=True):
             units += 1
             if not verdict.grounded:

@@ -58,7 +58,8 @@ def render_report(
         "|---|---|",
         *[f"| {case_id} | {_pct(stat)} |" for case_id, stat in summary.per_case.items()],
     ]
-    lines += _grounding_section(summary, results) + _thresholds_section(thresholds)
+    lines += _grounding_section(summary, results) + _constraints_section(summary, results)
+    lines += _thresholds_section(thresholds)
     failing = [r for r in sorted(results, key=lambda r: (r.case_id, r.repeat))
                if not (r.stop_reason == "final_answer" and r.eval_passed)]
     lines += ["", "## Failing runs", ""]
@@ -100,6 +101,57 @@ def _grounding_section(summary: ExperimentSummary, results: list[CaseResult]) ->
     return lines
 
 
+B2_VIOLATION_LABELS = {
+    "city_dates": "City / dates wrong",
+    "cost_accuracy": "Reported total ≠ sum of prices",
+    "overlap": "Overlapping activities",
+    "budget": "Over budget (actual price sum)",
+    "weather_judge": "Weather-unsuitable (LLM judge)",
+}
+
+
+# Phase 9 – Step 4: "B2 – Constraints & completion" section
+def _constraints_section(summary: ExperimentSummary, results: list[CaseResult]) -> list[str]:
+    b2 = summary.b2
+    if b2 is None:
+        return []
+    lines = ["", "## B2 – Constraints & completion (does the plan satisfy the hard constraints?)",
+             "", "Violation rates are over **produced plans** (when it answers, is it valid?).", "",
+             "| Constraint | Violation rate (95% CI) – lower is better |", "|---|---|"]
+    lines += [f"| {B2_VIOLATION_LABELS.get(key, key)} | {_pct(stat)} |"
+              for key, stat in b2.violations.items()]
+    lines += [
+        f"| Weather vs human labels (must-avoid picks ÷ labeled picks) | "
+        f"{_pct(b2.weather_label_violations)} |",
+        "",
+        "| Completion metric | Value (95% CI) |",
+        "|---|---|",
+        f"| All hard constraints pass (÷ plans) | {_pct(b2.all_hard_pass)} |",
+        f"| **Goal completion** (÷ all runs) | {_pct(summary.goal_completion)} |",
+        f"| Guardrail rejected ≥ 1 final answer (÷ final-answer runs) | "
+        f"{_pct(b2.guardrail_rejection)} |",
+        f"| Steps to completion (completed runs) | p50 {b2.steps_to_completion.p50:.0f}, "
+        f"p95 {b2.steps_to_completion.p95:.0f} |",
+        f"| Infeasible request handled (empty plan delivered) | "
+        f"{_pct(b2.infeasible_handled) if b2.infeasible_handled else 'no infeasible case'} |",
+        "| Weather judge agrees with human labels | "
+        + (f"{_pct(b2.weather_judge_agreement)} · missed {b2.judge_missed}, false alarms "
+           f"{b2.judge_false_alarms} |" if b2.weather_judge_agreement else "not measured |"),
+        "",
+        "### Why runs didn't complete (failure taxonomy)",
+        "",
+    ]
+    if not b2.failure_modes:
+        return lines + ["Every run completed."]
+    ordered = sorted(results, key=lambda r: (r.case_id, r.repeat))
+    lines += ["| Failure mode | Runs | Example |", "|---|---|---|"]
+    for mode, count in b2.failure_modes.items():
+        example = next(r for r in ordered if r.failure_mode == mode)
+        lines.append(f"| `{mode}` | {count} | {example.case_id} r{example.repeat} "
+                     f"({example.steps} steps) |")
+    return lines
+
+
 # Phase 8 – Step 7: threshold verdicts
 def _thresholds_section(thresholds: list[ThresholdResult] | None) -> list[str]:
     if not thresholds:
@@ -122,6 +174,27 @@ def _row(name: str, a: RateStat | None, b: RateStat | None) -> str:
         return f"| {name} | {_pct(a) if a else '—'} | {_pct(b) if b else '—'} | – | only in one |"
     verdict = "not clearly different" if _overlap(a, b) else "**likely real difference**"
     return f"| {name} | {_pct(a)} | {_pct(b)} | {b.rate - a.rate:+.1%} | {verdict} |"
+
+
+# Phase 9 – Step 4: B2 comparison rows (violations are lower-is-better)
+def _b2_rows(a: ExperimentSummary, b: ExperimentSummary) -> list[str]:
+    if not (a.b2 or b.b2):
+        return []
+    keys = sorted(set(a.b2.violations if a.b2 else {}) | set(b.b2.violations if b.b2 else {}))
+    rows = [_row(f"b2.{k}_violation (lower is better)",
+                 a.b2.violations.get(k) if a.b2 else None, b.b2.violations.get(k) if b.b2 else None)
+            for k in keys]
+    lower = " (lower is better)"
+    for attr, label in [("weather_label_violations", "b2.weather_label_violation" + lower),
+                        ("all_hard_pass", "b2.all_hard_pass"),
+                        ("guardrail_rejection", "b2.guardrail_rejection" + lower),
+                        ("infeasible_handled", "b2.infeasible_handled"),
+                        ("weather_judge_agreement", "b2.weather_judge_agreement")]:
+        stat_a = getattr(a.b2, attr, None) if a.b2 else None
+        stat_b = getattr(b.b2, attr, None) if b.b2 else None
+        if stat_a or stat_b:  # skip metrics neither side measured
+            rows.append(_row(label, stat_a, stat_b))
+    return rows
 
 
 # Phase 7 – Step 6: A vs B side by side; refuses different datasets unless forced
@@ -148,6 +221,8 @@ def compare(a: ExperimentSummary, b: ExperimentSummary, force: bool = False) -> 
           for m in ("activity_hallucination", "plan_hallucination", "trajectory_ungrounded",
                     "reason_reference_errors", "ungrounded_reasons")
           if a.b1 or b.b1],
+        # Phase 9 – Step 4: B2 rows
+        *_b2_rows(a, b),
         "",
         f"Cost per run: A {a.cost_usd.mean:.4f} → B {b.cost_usd.mean:.4f} USD · "
         f"steps: A {a.steps.mean:.1f} → B {b.steps.mean:.1f} · "
