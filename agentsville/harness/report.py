@@ -59,6 +59,7 @@ def render_report(
         *[f"| {case_id} | {_pct(stat)} |" for case_id, stat in summary.per_case.items()],
     ]
     lines += _grounding_section(summary, results) + _constraints_section(summary, results)
+    lines += _b3_section(summary, results)
     lines += _thresholds_section(thresholds)
     failing = [r for r in sorted(results, key=lambda r: (r.case_id, r.repeat))
                if not (r.stop_reason == "final_answer" and r.eval_passed)]
@@ -152,6 +153,65 @@ def _constraints_section(summary: ExperimentSummary, results: list[CaseResult]) 
     return lines
 
 
+B3_GRADERS_FOR_EXAMPLES = (
+    "interest_coverage_labeled", "traveler_relevancy", "calculator_total",
+    "verified_before_final", "weather_lookup_coverage", "thought_action_consistency",
+)
+
+
+def _stat_cell(stat: RateStat | None) -> str:
+    return _pct(stat) if stat else "not measured"
+
+
+# Phase 10 – Step 6: "B3 – Relevancy & reasoning" section
+def _b3_section(summary: ExperimentSummary, results: list[CaseResult]) -> list[str]:
+    rel, rea = summary.b3_relevancy, summary.b3_reasoning
+    if rel is None and rea is None:
+        return []
+    lines = ["", "## B3 – Relevancy & reasoning (is it relevant, and is the reasoning faithful?)",
+             "", "Plan-dependent rates count only runs that produced a plan.", ""]
+    if rel is not None:
+        mean = (f"{rel.mean_relevancy_score:.2f} "
+                f"({', '.join(f'{k[-1]}: {v}' for k, v in rel.score_counts.items())})"
+                if rel.mean_relevancy_score is not None else "not measured")
+        lines += ["| Relevancy | Value (95% CI) |", "|---|---|",
+                  f"| Coverable travelers matched (labeled coverage) | "
+                  f"{_stat_cell(rel.interest_coverage)} |",
+                  f"| Activities matching nobody – lower is better | "
+                  f"{_stat_cell(rel.interest_mismatch)} |",
+                  f"| **Relevant travelers** (judge score ≥ 4) | {_stat_cell(rel.relevant_rate)} |",
+                  f"| Poorly served travelers (score ≤ 2) – lower is better | "
+                  f"{_stat_cell(rel.low_relevancy)} |",
+                  f"| Mean relevancy score (1–5) | {mean} |", ""]
+    if rea is not None:
+        lines += ["| Reasoning | Value (95% CI) |", "|---|---|",
+                  f"| Weather looked up for every day (÷ trip days) | "
+                  f"{_stat_cell(rea.weather_lookup_coverage)} |",
+                  f"| Activities looked up for every day (÷ trip days) | "
+                  f"{_stat_cell(rea.activity_lookup_coverage)} |",
+                  f"| Total came from the calculator (÷ plans with activities) | "
+                  f"{_stat_cell(rea.calculator_faithfulness)} |",
+                  f"| Submitted plan passed run_evals_tool (÷ accepted plans) | "
+                  f"{_stat_cell(rea.verified_before_final)} |",
+                  f"| **Faithful** (both of the above) | {_stat_cell(rea.faithfulness)} |",
+                  f"| Thought↔action inconsistency (÷ judged steps; a lower bound) – lower is "
+                  f"better | {_stat_cell(rea.thought_action_inconsistency)} |",
+                  f"| Redundant lookups – lower is better | "
+                  f"{_stat_cell(rea.redundant_call_rate)} |",
+                  f"| Error steps – lower is better | {_stat_cell(rea.error_step_rate)} |"]
+        kinds = [f"{name}: " + ", ".join(f"{k} {v}" for k, v in sorted(c.items()))
+                 for name, c in rea.failure_counts.items() if c]
+        if kinds:
+            lines += ["", "Failure kinds: " + " · ".join(kinds)]
+    examples = [f"{r.case_id} r{r.repeat} · {name}: {o.details[0]}"
+                for r in sorted(results, key=lambda r: (r.case_id, r.repeat))
+                for name in B3_GRADERS_FOR_EXAMPLES
+                if (o := r.grader_outcomes.get(name)) and not o.passed and o.units and o.details]
+    lines += ["", f"Examples ({min(5, len(examples))} of {len(examples)}):", ""]
+    lines += [f"- {e}" for e in examples[:5]] or ["- none"]
+    return lines
+
+
 # Phase 8 – Step 7: threshold verdicts
 def _thresholds_section(thresholds: list[ThresholdResult] | None) -> list[str]:
     if not thresholds:
@@ -197,6 +257,33 @@ def _b2_rows(a: ExperimentSummary, b: ExperimentSummary) -> list[str]:
     return rows
 
 
+B3_COMPARE_ROWS = [
+    ("b3_relevancy", "interest_coverage", "b3.interest_coverage"),
+    ("b3_relevancy", "interest_mismatch", "b3.interest_mismatch (lower is better)"),
+    ("b3_relevancy", "relevant_rate", "b3.relevant_rate"),
+    ("b3_relevancy", "low_relevancy", "b3.low_relevancy (lower is better)"),
+    ("b3_reasoning", "weather_lookup_coverage", "b3.weather_lookup_coverage"),
+    ("b3_reasoning", "calculator_faithfulness", "b3.calculator_faithfulness"),
+    ("b3_reasoning", "verified_before_final", "b3.verified_before_final"),
+    ("b3_reasoning", "faithfulness", "b3.faithfulness"),
+    ("b3_reasoning", "thought_action_inconsistency",
+     "b3.thought_action_inconsistency (lower is better)"),
+    ("b3_reasoning", "redundant_call_rate", "b3.redundant_call_rate (lower is better)"),
+    ("b3_reasoning", "error_step_rate", "b3.error_step_rate (lower is better)"),
+]
+
+
+# Phase 10 – Step 6: B3 comparison rows; metrics neither side measured are left out
+def _b3_rows(a: ExperimentSummary, b: ExperimentSummary) -> list[str]:
+    rows = []
+    for group, attr, label in B3_COMPARE_ROWS:
+        stat_a = getattr(getattr(a, group), attr, None) if getattr(a, group) else None
+        stat_b = getattr(getattr(b, group), attr, None) if getattr(b, group) else None
+        if stat_a or stat_b:
+            rows.append(_row(label, stat_a, stat_b))
+    return rows
+
+
 # Phase 7 – Step 6: A vs B side by side; refuses different datasets unless forced
 def compare(a: ExperimentSummary, b: ExperimentSummary, force: bool = False) -> str:
     if (a.dataset_version, a.dataset_sha256) != (b.dataset_version, b.dataset_sha256) and not force:
@@ -223,6 +310,8 @@ def compare(a: ExperimentSummary, b: ExperimentSummary, force: bool = False) -> 
           if a.b1 or b.b1],
         # Phase 9 – Step 4: B2 rows
         *_b2_rows(a, b),
+        # Phase 10 – Step 6: B3 rows
+        *_b3_rows(a, b),
         "",
         f"Cost per run: A {a.cost_usd.mean:.4f} → B {b.cost_usd.mean:.4f} USD · "
         f"steps: A {a.steps.mean:.1f} → B {b.steps.mean:.1f} · "

@@ -32,3 +32,26 @@ max_cost_accuracy_violation_rate = 0.10
 min_goal_completion_rate = 0.60
 # Judge trust bar: weather judge vs human labels, measured 100% [89–100%] (30/30).
 min_weather_judge_agreement = 0.90
+
+# Phase 10 – Step 8: relevancy & reasoning. Measured on 36 live runs (golden v1.0.0, gpt-4o-mini,
+# prompt v1) and the B0 recording CI replays – see plan/10-b3-relevancy-reasoning/b3-findings.md §6
+# (owner-approved). Every value passes on the B0 recording.
+[b3]
+# Targets: near-perfect today.
+min_interest_coverage = 0.90  # live 97.6% [88–100%], B0 100%
+min_weather_lookup_coverage = 0.95  # live 98.6% [92–100%], B0 100%
+# Regression guards just below today's level.
+min_relevant_rate = 0.80  # live 93.6% [83–98%], B0 100%
+min_verified_before_final_rate = 0.85  # live 92.9% [77–98%], B0 100%
+# Deliberately loose: the B0 recording is at 50% (a 0.70 target would fail CI). Raise after B4
+# computes total_cost in code.
+min_calculator_faithfulness = 0.45  # live 80.0% [61–91%], B0 50%
+min_faithfulness = 0.45  # live 76.0% [57–89%], B0 50%
+max_thought_action_inconsistency = 0.20  # live 15.8% [13–19%] (a lower bound), B0 11.0%
+max_redundant_call_rate = 0.15  # live 9.2% [6–13%], B0 8.1%
+max_error_step_rate = 0.15  # live 9.4% [7–12%], B0 9.7%
+# Judge trust bars (calibration). Relevancy: 25/25 exact, weighted kappa 1.00 (optimistic – tuned
+# on its own set). Thought↔action: precision 0.94, recall 0.83 – below B1's 0.90 recall by decision.
+min_relevancy_judge_qwk = 0.80
+min_thought_action_judge_recall = 0.80
+min_thought_action_judge_precision = 0.85

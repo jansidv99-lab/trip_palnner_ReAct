@@ -103,6 +103,30 @@ class ConstraintMetrics(BaseModel):
     judge_false_alarms: int = 0  # judge flagged, label says suitable
 
 
+# Phase 10 – Step 6: B3 relevancy numbers ("is the plan relevant to THESE travelers?")
+class RelevancyMetrics(BaseModel):
+    interest_coverage: RateStat | None = None  # coverable travelers matched ÷ coverable travelers
+    interest_mismatch: RateStat | None = None  # activities matching nobody ÷ activities (lower)
+    relevant_rate: RateStat | None = None  # travelers scored ≥ 4 ÷ judged travelers (judge)
+    low_relevancy: RateStat | None = None  # travelers scored ≤ 2 ÷ judged travelers (lower)
+    mean_relevancy_score: float | None = None  # mean 1–5 judge score
+    score_counts: dict[str, int] = {}  # score_1 … score_5
+
+
+# Phase 10 – Step 6: B3 reasoning numbers ("is the step-by-step reasoning faithful?")
+class ReasoningMetrics(BaseModel):
+    weather_lookup_coverage: RateStat | None = None  # trip days looked up ÷ trip days
+    activity_lookup_coverage: RateStat | None = None
+    calculator_faithfulness: RateStat | None = None  # plans whose total came from the calculator
+    verified_before_final: RateStat | None = None  # accepted plans that passed run_evals_tool
+    faithfulness: RateStat | None = None  # accepted plans with activities passing BOTH checks
+    thought_action_inconsistency: RateStat | None = None  # judged steps (lower; judge – a
+    # lower bound: calibration recall 0.83)
+    redundant_call_rate: RateStat | None = None  # repeated identical lookups ÷ lookups (lower)
+    error_step_rate: RateStat | None = None  # error steps ÷ all steps (lower)
+    failure_counts: dict[str, dict[str, int]] = {}  # grader → failure kind → count
+
+
 # Phase 7 – Step 5: everything an experiment report and a comparison need
 class ExperimentSummary(BaseModel):
     config: ExperimentConfig
@@ -121,6 +145,8 @@ class ExperimentSummary(BaseModel):
     run_graders: dict[str, UnitStat] = {}  # Phase 8
     b1: GroundingMetrics | None = None  # Phase 8
     b2: ConstraintMetrics | None = None  # Phase 9
+    b3_relevancy: RelevancyMetrics | None = None  # Phase 10
+    b3_reasoning: ReasoningMetrics | None = None  # Phase 10
 
 
 # Phase 8 – Step 6: pool one run-level grader over all results
@@ -198,6 +224,61 @@ def _constraints(results: list[CaseResult], stats: dict[str, UnitStat]) -> Const
     )
 
 
+# Phase 10 – Step 6: B3 relevancy from the run-level grader outcomes
+def _relevancy(stats: dict[str, UnitStat]) -> RelevancyMetrics | None:
+    if "interest_match" not in stats:
+        return None
+    judge = stats.get("traveler_relevancy")
+    metrics = RelevancyMetrics(
+        interest_coverage=_passed_units(stats.get("interest_coverage_labeled")),
+        interest_mismatch=stats["interest_match"].unit_failure,
+    )
+    if judge and judge.unit_failure.n:
+        counts = {k: v for k, v in sorted(judge.counts.items()) if k.startswith("score_")}
+        judged = sum(counts.values())
+        good = counts.get("score_4", 0) + counts.get("score_5", 0)
+        metrics.relevant_rate = RateStat.of(good, judged)
+        metrics.low_relevancy = judge.unit_failure
+        metrics.mean_relevancy_score = (
+            sum(int(k[-1]) * v for k, v in counts.items()) / judged if judged else None)
+        metrics.score_counts = counts
+    return metrics
+
+
+B3_REASONING_GRADERS = ("weather_lookup_coverage", "activity_lookup_coverage", "calculator_total",
+                        "verified_before_final", "tool_efficiency", "thought_action_consistency")
+
+
+# Phase 10 – Step 6: B3 reasoning; plan-dependent checks count only runs that produced a plan
+def _reasoning(results: list[CaseResult], stats: dict[str, UnitStat]) -> ReasoningMetrics | None:
+    if "calculator_total" not in stats:
+        return None
+    both = [r for r in results
+            if r.grader_outcomes.get("calculator_total")
+            and r.grader_outcomes["calculator_total"].units
+            and r.grader_outcomes.get("verified_before_final")
+            and r.grader_outcomes["verified_before_final"].units]
+    faithful = sum(r.grader_outcomes["calculator_total"].passed
+                   and r.grader_outcomes["verified_before_final"].passed for r in both)
+    errors = sum(r.grader_outcomes["tool_efficiency"].counts.get("error_steps", 0)
+                 for r in results if "tool_efficiency" in r.grader_outcomes)
+    judge = stats.get("thought_action_consistency")
+    efficiency = stats.get("tool_efficiency")
+    return ReasoningMetrics(
+        weather_lookup_coverage=_passed_units(stats.get("weather_lookup_coverage")),
+        activity_lookup_coverage=_passed_units(stats.get("activity_lookup_coverage")),
+        calculator_faithfulness=_passed_units(stats.get("calculator_total")),
+        verified_before_final=_passed_units(stats.get("verified_before_final")),
+        faithfulness=RateStat.of(faithful, len(both)) if both else None,
+        thought_action_inconsistency=judge.unit_failure if judge and judge.unit_failure.n
+        else None,
+        redundant_call_rate=efficiency.unit_failure if efficiency else None,
+        error_step_rate=RateStat.of(errors, sum(r.steps for r in results)) if results else None,
+        failure_counts={name: {k: v for k, v in stats[name].counts.items() if k != "error_steps"}
+                        for name in B3_REASONING_GRADERS if name in stats},
+    )
+
+
 # Phase 7 – Step 5: aggregate the results of one experiment
 def summarize(
     config: ExperimentConfig, manifest: DatasetManifest, results: list[CaseResult]
@@ -237,4 +318,6 @@ def summarize(
         run_graders=run_graders,
         b1=_grounding(results, run_graders),
         b2=_constraints(results, run_graders),
+        b3_relevancy=_relevancy(run_graders),
+        b3_reasoning=_reasoning(results, run_graders),
     )

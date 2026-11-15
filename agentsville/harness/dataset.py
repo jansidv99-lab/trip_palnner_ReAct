@@ -16,8 +16,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from agentsville.agent import AgentStep
 from agentsville.data_api import get_activity_by_id
-from agentsville.models import Traveler, VacationInfo
+from agentsville.models import Traveler, TravelPlan, VacationInfo
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 DATASETS_DIR = ROOT / "evals" / "datasets" / "golden"
@@ -213,8 +214,88 @@ def load_calibration(
 
 # Phase 8 – Step 3: write a NEW calibration version
 def write_calibration(
-    name: str, version: str, items: list[CalibrationItem], created: date,
+    name: str, version: str, items: list[BaseModel], created: date,  # Phase 10: any item model
     root: Path = CALIBRATION_DIR,
 ) -> DatasetManifest:
     return _write_versioned(root / name / version, "items.jsonl", items, f"calibration/{name}",
                             version, created)
+
+
+# Phase 10 – Step 4: one relevancy-judge call's worth of human scores (a plan + every traveler)
+class RelevancyCalibrationItem(BaseModel):
+    item_id: str = Field(pattern=r"^r\d{2}-[a-z0-9-]+$")
+    source: str  # where the plan came from, e.g. "live-v1-r3 g04 r2" or "synthetic: …"
+    vacation_info: VacationInfo
+    travel_plan: TravelPlan
+    scores: list[int]  # human 1–5 score per traveler, same order as vacation_info.travelers
+    justifications: list[str]  # why that score – the reviewer checks these
+
+    @model_validator(mode="after")
+    def _one_score_per_traveler(self) -> "RelevancyCalibrationItem":
+        n = len(self.vacation_info.travelers)
+        if len(self.scores) != n or len(self.justifications) != n:
+            raise ValueError("need exactly one score and one justification per traveler")
+        if any(not 1 <= s <= 5 for s in self.scores):
+            raise ValueError("scores must be 1–5")
+        return self
+
+
+class RelevancyCalibrationDataset(BaseModel):
+    manifest: DatasetManifest
+    items: list[RelevancyCalibrationItem]
+
+
+# Phase 10 – Step 4: load calibration/relevancy/<version>/ with the same integrity checks
+def load_relevancy_calibration(
+    version: str = "v1.0.0", root: Path = CALIBRATION_DIR
+) -> RelevancyCalibrationDataset:
+    label = f"calibration/relevancy {version}"
+    manifest, lines = _read_verified(root / "relevancy" / version, "items.jsonl", label)
+    items = _parse(lines, RelevancyCalibrationItem, label)
+    problems = _duplicates([i.item_id for i in items], "item_id")
+    problems += [f"{i.item_id}: unknown activity {rec.activity.activity_id}" for i in items
+                 for day in i.travel_plan.itinerary_days for rec in day.activity_recommendations
+                 if get_activity_by_id(rec.activity.activity_id) is None]
+    if len(items) != manifest.case_count:
+        problems.append(f"manifest says {manifest.case_count} items, found {len(items)}")
+    if problems:
+        raise DatasetError(f"dataset {label}: " + "; ".join(problems))
+    return RelevancyCalibrationDataset(manifest=manifest, items=items)
+
+
+# Phase 10 – Step 5: a trajectory excerpt with a human consistency label per judged step
+class ThoughtActionCalibrationItem(BaseModel):
+    item_id: str = Field(pattern=r"^t\d{2}-[a-z0-9-]+$")
+    source: str  # "live-v1-r3 g05 r3 steps 4-11" or "synthetic: …"
+    budget: int
+    start_observation: str  # the observation the first step of the excerpt reacted to
+    steps: list[AgentStep] = Field(min_length=1)
+    consistent: list[bool]  # one human label per step WITH a parsed action, in order
+    justifications: list[str]
+
+    @model_validator(mode="after")
+    def _one_label_per_judged_step(self) -> "ThoughtActionCalibrationItem":
+        judged = sum(s.tool_name is not None for s in self.steps)
+        if len(self.consistent) != judged or len(self.justifications) != judged:
+            raise ValueError("need exactly one label and one justification per judged step")
+        return self
+
+
+class ThoughtActionCalibrationDataset(BaseModel):
+    manifest: DatasetManifest
+    items: list[ThoughtActionCalibrationItem]
+
+
+# Phase 10 – Step 5: load calibration/thought_action/<version>/ with the same integrity checks
+def load_thought_action_calibration(
+    version: str = "v1.0.0", root: Path = CALIBRATION_DIR
+) -> ThoughtActionCalibrationDataset:
+    label = f"calibration/thought_action {version}"
+    manifest, lines = _read_verified(root / "thought_action" / version, "items.jsonl", label)
+    items = _parse(lines, ThoughtActionCalibrationItem, label)
+    problems = _duplicates([i.item_id for i in items], "item_id")
+    if len(items) != manifest.case_count:
+        problems.append(f"manifest says {manifest.case_count} items, found {len(items)}")
+    if problems:
+        raise DatasetError(f"dataset {label}: " + "; ".join(problems))
+    return ThoughtActionCalibrationDataset(manifest=manifest, items=items)

@@ -8,6 +8,8 @@
     python scripts/run_experiment.py --cases g01-sample-yuri-hiro,g07-infeasible-budget
     python scripts/run_experiment.py --grade-mode record      # replay agent, re-record grading only
     python scripts/run_experiment.py --check-thresholds       # + evals/thresholds.toml verdicts
+    python scripts/run_experiment.py --record-graders traveler_relevancy  # record ONE new judge,
+                                                              # replay everything else
     python scripts/run_experiment.py --update-expected        # rewrite expected results after a
                                                               # grading-only change (replay, $0)
 """
@@ -29,13 +31,18 @@ from agentsville.harness.runner import (  # noqa: E402
     read_results,
     run_experiment,
     update_expected,
+    validate_record_graders,
 )
 from agentsville.harness.schema import (  # noqa: E402
     EXPERIMENTS_DIR,
     CaseResult,
     ExperimentConfig,
 )
-from agentsville.harness.thresholds import check_thresholds, thresholds_passed  # noqa: E402
+from agentsville.harness.thresholds import (  # noqa: E402
+    check_thresholds,
+    committed_judge_reports,
+    thresholds_passed,
+)
 from agentsville.llm import LLMClient  # noqa: E402
 
 
@@ -63,6 +70,9 @@ def main() -> int:
     parser.add_argument("--mode", choices=["live", "record", "replay"], default="replay")
     parser.add_argument("--grade-mode", choices=["live", "record", "replay"],
                         help="mode for grading (judge) cassettes; default: same as --mode")
+    # Phase 10 – Step 1: record only the named LLM judges (own cassettes); others replay
+    parser.add_argument("--record-graders",
+                        help="comma-separated LLM judges to record; every other judge replays")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--cases", help="comma-separated case ids (default: all)")
     parser.add_argument("--out", type=Path, help="output folder (default: experiments/<ts>__<id>)")
@@ -75,23 +85,28 @@ def main() -> int:
                         help="replay only: rewrite expected_results.jsonl with these results")
     args = parser.parse_args()
 
-    config = ExperimentConfig(
-        dataset_version=args.dataset, model=args.model, prompt_version=args.prompt,
-        temperature=args.temperature, repeats=args.repeats, max_steps=args.max_steps,
-        include_llm_evals=not args.no_judge, mode=args.mode, grade_mode=args.grade_mode,
-        workers=args.workers,
-        case_ids=args.cases.split(",") if args.cases else None,
-    )
+    try:  # Phase 10 – Step 1: invalid flag combinations print a message, not a traceback
+        config = ExperimentConfig(
+            dataset_version=args.dataset, model=args.model, prompt_version=args.prompt,
+            temperature=args.temperature, repeats=args.repeats, max_steps=args.max_steps,
+            include_llm_evals=not args.no_judge, mode=args.mode, grade_mode=args.grade_mode,
+            workers=args.workers,
+            case_ids=args.cases.split(",") if args.cases else None,
+            record_graders=args.record_graders.split(",") if args.record_graders else None,
+        )
+        validate_record_graders(config.record_graders)
+    except ValueError as exc:  # pydantic's ValidationError is a ValueError
+        print(f"invalid options: {exc}")
+        return 1
     if args.update_expected and args.check_expected:
         print("use either --update-expected or --check-expected, not both")
         return 1
-    if args.update_expected and (config.mode != "replay" or config.effective_grade_mode != "replay"
-                                 or config.case_ids is not None):
+    if args.update_expected and (config.needs_llm or config.case_ids is not None):
         print("--update-expected needs a full replay: no --mode/--grade-mode other than replay, "
-              "no --cases")
+              "no --record-graders, no --cases")
         return 1
     base_llm = None
-    if config.mode != "replay" or config.effective_grade_mode != "replay":
+    if config.needs_llm:
         try:
             base_llm = LLMClient(get_settings())
         except ConfigError as exc:
@@ -131,7 +146,8 @@ def main() -> int:
         print(f"repeatability check passed: {len(results)} runs identical to the recording")
 
     if args.check_thresholds:
-        thresholds = check_thresholds(summary, load_committed_calibration())
+        thresholds = check_thresholds(summary, load_committed_calibration(),
+                                      judge_reports=committed_judge_reports())
         (out / "report.md").write_text(render_report(summary, results, thresholds),
                                        encoding="utf-8")
         for t in thresholds:

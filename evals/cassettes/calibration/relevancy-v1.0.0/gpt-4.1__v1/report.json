@@ -1,0 +1,31 @@
+{
+  "dataset": "calibration/relevancy v1.0.0",
+  "dataset_sha256": "76f2ff54fbdce6866b2293b993ad68f2f76c0bbb63953a31f2e9305420536482",
+  "judge_model": "gpt-4.1",
+  "judge_prompt_version": "v1",
+  "n": 25,
+  "exact": 0.28,
+  "within_1": 0.76,
+  "mae": 0.96,
+  "qwk": 0.511400651465798,
+  "disagreements": [
+    "r01-yuri-hiro-misses Hiro: human 3, judge 4 – Palette & Palate: Art Meets Cooking Experience (art) on 2025-06-11 was a suitable, non-overlapping option that was missed.",
+    "r03-group-of-six Ava: human 1, judge 3 – AgentsVille Art & Music Fusion Fest or Palette & Palate: Art Meets Cooking Experience (both on 2025-06-11) matched Ava's art interest but were not chosen.",
+    "r03-group-of-six Ben: human 4, judge 5 – Ben's music interest was served both days with Morning Groove Dance Party, Tech Lunch & Learn, and Soundtrack Picnic all available and at least one chosen each day.",
+    "r03-group-of-six Dev: human 5, judge 4 – Trail Tales: Writing & Hiking Adventure (2025-06-12) matched Dev's writing interest and was not chosen, but Tech Lunch & Learn (2025-06-11) did serve writing.",
+    "r03-group-of-six Eli: human 5, judge 4 – Soundtrack Picnic: Lunchtime Movies & Melodies (2025-06-12) matched Eli's movies interest and was not chosen, but Tech & Film Fusion Night was chosen.",
+    "r04-family-full-window Raj: human 5, judge 3 – Gardening events (AgentsVille Nature & Green Thumb Adventure on 6/12 and multiple on 6/14) were available and suitable but not chosen.",
+    "r04-family-full-window Priya: human 5, judge 4 – AgentsVille Twilight Writing Escape (6/10) or AgentsVille Art & Music Fusion Fest (6/11) could have been added for more art/reading, but most suitable options were included.",
+    "r04-family-full-window Arjun: human 4, judge 3 – FutureTech Breakfast Meet-Up (6/10) and Tech Lunch & Learn: AI Frontiers (6/11) were suitable technology events not chosen.",
+    "r05-rainy-outdoor-lover Mika: human 5, judge 3 – On 2025-06-13, 'Art & Lens: Outdoor Creative Walk' (photography) was available but not chosen; on 2025-06-13, 'Sunset Groove Hike' (hiking) was also available but not chosen; on 2025-06-14, no suitable indoor activities for Mika's interests were available, so not penalized for that day.",
+    "r06-generous-one-miss Lina: human 4, judge 3 – On 2025-06-11, 'Tech Lunch & Learn: AI Frontiers', 'AgentsVille Art & Music Fusion Fest', and 'Palette & Palate: Art Meets Cooking Experience' were all suitable and matched Lina's interests (writing, art, music, photography), but only the dance party was chosen; on 2025-06-12, 'Soundtrack Picnic' was suitable and matched her music interest but was not chosen; on 2025-06-13, no suitable indoor activities for her interests were available due to weather, so not penalized for that day.",
+    "r07-solo-tech-ignored Sam: human 1, judge 3 – On 2025-06-10 and 2025-06-11, technology events (FutureTech Breakfast Meet-Up and Tech Lunch & Learn: AI Frontiers) were available and suitable but not chosen.",
+    "r08-storm-day-ignored Omar: human 1, judge 3 – The planned activity did not match any of Omar's interests, while 'Soundtrack Picnic: Lunchtime Movies & Melodies' and 'Tech & Film Fusion Night' were both suitable and matched his interests.",
+    "r09-yuri-ignored Yuri: human 1, judge 3 – On 2025-06-10, 'Serve & Savor: Tennis and Taste Luncheon' and 'FutureTech Breakfast Meet-Up' both matched Yuri's interests but were not chosen; on 2025-06-11, 'Tech Lunch & Learn: AI Frontiers' and 'Palette & Palate: Art Meets Cooking Experience' were also suitable but not planned.",
+    "r09-yuri-ignored Hiro: human 5, judge 4 – On 2025-06-11, 'Morning Groove Dance Party' (music) was a suitable additional option but not chosen; otherwise, Hiro's interests in reading, art, and music were well served.",
+    "r10-meera-starved Raj: human 5, judge 4 – Missed 'AgentsVille Nature & Green Thumb Adventure' (gardening) on 2025-06-12 morning, which matched his interest and was suitable.",
+    "r10-meera-starved Arjun: human 4, judge 3 – Missed 'FutureTech Breakfast Meet-Up' (technology) on 2025-06-10 and 'Tech Lunch & Learn: AI Frontiers' (technology) on 2025-06-11, both suitable and non-overlapping.",
+    "r10-meera-starved Meera: human 2, judge 3 – Missed 'Morning Groove Dance Party' (dancing) on 2025-06-11 and both dance events on 2025-06-15, all suitable and non-overlapping.",
+    "r11-generous-two-misses Lina: human 3, judge 4 – On 2025-06-11, 'Tech Lunch & Learn: AI Frontiers' or 'AgentsVille Art & Music Fusion Fest' would have matched Lina's interests and could have been added without budget or time conflicts."
+  ]
+}

@@ -1,4 +1,5 @@
 # Phase 7 – Step 9: experiment runner, metrics and report – record once, replay identically.
+# Phase 10 – Step 10: --record-graders through the runner.
 
 import pytest
 
@@ -95,9 +96,11 @@ def test_repeats_use_separate_cassettes(roots):
     run_experiment(config(mode="record", repeats=2), base_llm=ConversationFake(HAPPY_SCRIPT),
                    **roots)
     case_dir = config().cassette_dir(roots["cassette_root"]) / "g01-sample"
-    assert sorted(p.name for p in case_dir.iterdir()) == [
-        "r1.grading.jsonl", "r1.jsonl", "r2.grading.jsonl", "r2.jsonl"
-    ]  # Phase 8: agent and grading cassettes are separate files
+    judges = ("thought_action_consistency", "traveler_relevancy")  # Phase 10: one file per judge
+    assert sorted(p.name for p in case_dir.iterdir()) == sorted(
+        [f"r{n}.jsonl" for n in (1, 2)] + [f"r{n}.grading.jsonl" for n in (1, 2)]
+        + [f"r{n}.grading.{j}.jsonl" for n in (1, 2) for j in judges]
+    )  # Phase 8: agent and grading cassettes are separate files
 
 
 def test_case_subset_and_unknown_ids(roots):
@@ -234,3 +237,21 @@ def test_no_judge_skips_llm_graders(roots):
                                 base_llm=ConversationFake(HAPPY_SCRIPT), **roots)
     assert "reasons_grounded" not in results[0].grader_outcomes
     assert "activity_grounding" in results[0].grader_outcomes
+
+
+# Phase 10 – Step 10: --record-graders end to end – only the named judge calls the LLM, the agent
+# and every other judge replay, and the expected results are rewritten with the new outcomes
+def test_record_graders_through_the_runner(roots):
+    run_experiment(config(mode="record"), base_llm=ConversationFake(HAPPY_SCRIPT), **roots)
+    folder = config().cassette_dir(roots["cassette_root"]) / "g01-sample"
+    agent_and_b1 = {p.name: p.read_bytes() for p in folder.iterdir()
+                    if "traveler_relevancy" not in p.name}
+
+    fake = ConversationFake(["never used – the agent replays"])
+    _, results = run_experiment(config(mode="replay", record_graders=["traveler_relevancy"]),
+                                base_llm=fake, **roots)
+    assert fake.calls == 2  # one relevancy call per case, nothing else
+    assert {p.name: p.read_bytes() for p in folder.iterdir()
+            if "traveler_relevancy" not in p.name} == agent_and_b1
+    expected = read_results(config().cassette_dir(roots["cassette_root"]) / EXPECTED_RESULTS_FILE)
+    assert compare_with_expected(results, expected) == []

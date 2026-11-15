@@ -45,11 +45,15 @@ python scripts/run_experiment.py --mode live --repeats 3   # fresh runs to measu
 python scripts/compare_experiments.py experiments/A experiments/B
 python scripts/run_experiment.py --check-thresholds  # + evals/thresholds.toml verdicts (exit 4)
 python scripts/run_experiment.py --grade-mode record # replay agent, re-record grading only
+python scripts/run_experiment.py --record-graders traveler_relevancy  # record ONE judge, replay the rest
 python scripts/run_experiment.py --update-expected   # code-grader change only: rewrite expected results ($0)
 python scripts/grade_runs.py experiments/<exp>      # grade stored runs (no agent re-run)
-python scripts/calibrate_judge.py --check-expected  # replay judge vs human labels
+python scripts/calibrate_judge.py --check-expected  # replay every judge vs its human labels (CI)
+python scripts/calibrate_judge.py --judge thought_action --mode record  # re-record one judge
 python scripts/build_golden_dataset.py              # provenance script: builds a NEW golden version (bump version first)
 python scripts/build_calibration_dataset.py         # provenance script: builds a NEW calibration version
+python scripts/build_relevancy_calibration.py       # prints items for review; --write writes a NEW version
+python scripts/build_thought_action_calibration.py  # same; needs experiments/live-v1-r3 (git-ignored)
 ```
 
 CI (`.github/workflows/ci.yml`) runs two jobs on every PR and push to `main`: `lint` (`ruff check .`) and `test` (`pytest`). Both are required checks on `main`. `llm`-marked tests never run in CI, and CI uses no secrets.
@@ -126,14 +130,15 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
     - A run without a plan counts as a failure for every grader.
   - `report.py`: `render_report` builds the markdown report. `compare` refuses different dataset versions or hashes unless `force=True`, and calls a difference "likely real" only when the intervals don't overlap.
   - **Line endings matter:** `.gitattributes` forces LF for `prompts/**` and `evals/**`, and `prompts.py` LF-normalizes too. Hashes must match between Windows (`core.autocrlf=true`) and Linux CI.
-  - Harness tests use `tests/harness_fakes.py` (`ConversationFake`, `make_dataset`). The fake also answers both judges; the reasons judge flags any reason containing `UNGROUNDED`. B2 graders, taxonomy, metrics, thresholds and signal are tested in `tests/test_constraints.py`.
+  - Harness tests use `tests/harness_fakes.py` (`ConversationFake`, `make_dataset`). The fake answers every judge by recognizing its system prompt: the reasons judge flags any reason containing `UNGROUNDED`; the relevancy judge says nothing more was possible (all 5s); the thought↔action judge says every step is consistent. A new judge must be added to the fake, or runner tests send its calls to the agent script. B2 is tested in `tests/test_constraints.py`; B3 in `test_relevancy.py`, `test_trajectory.py`, `test_b3_metrics.py`, `test_judge_cassettes.py`.
 - **Run-level graders** (Phase 8, B1): `agentsville/harness/grading.py` + `agentsville/graders/`.
   - A `RunGrader(name, kind, fn(run, ctx), needs_plan=True)` grades a finished `AgentRun` and returns `GraderOutcome` (units / failed_units / counts / details).
   - `ctx` is a `GradingContext(llm, case)` (Phase 9): `ctx.llm` is set only for `kind="llm"` graders; `ctx.case` is the `GoldenCase` (labels) or `None` outside a dataset. Label-based graders return `not_applicable(...)` (passed, 0 units) when they can't apply. The runner and `grade_runs.py` pass the case.
   - `grade_run` gives a run without a plan a failing outcome for every grader with `needs_plan=True`; `needs_plan=False` graders (`infeasible_handling`) judge plan-less runs themselves.
   - Outcomes land in `CaseResult.grader_outcomes`; `ExperimentSummary.run_graders` holds micro unit rates, `.b1` the grounding headline and `.b2` the constraint headline.
   - `ALL_GRADERS` in `agentsville/graders/__init__.py` = `B1_GRADERS + B2_GRADERS`; adding a grader there changes `CaseResult`, so refresh expected results with `--update-expected`.
-  - Judge calls during grading use their **own** cassette `<case>/r<n>.grading.jsonl`, separate from the agent's `r<n>.jsonl`. To change a judge, re-grade with `--grade-mode record` (agent replays), or use `scripts/grade_runs.py` on stored `experiments/*/runs.jsonl` (it also derives `failure_mode` / `final_rejections` for results stored before Phase 9). Never re-run the agent for that.
+  - **Each LLM judge has its own grading cassette** (Phase 10), separate from the agent's `r<n>.jsonl`: `reasons_grounded` keeps the original `r<n>.grading.jsonl`, every other judge uses `r<n>.grading.<name>.jsonl` (`runner.judge_cassette`). `--record-graders a,b` (on `run_experiment.py` and `grade_runs.py`) records only those judges and replays the rest, so adding a judge never re-calls or changes another one (record mode empties a cassette before writing). A newly registered judge has no cassette yet: every replay fails with `CassetteMissError` until it's recorded – register and record in the same change.
+  - Judge calls during grading never touch the agent's cassette. To change a judge, re-grade with `--grade-mode record` (agent replays), or use `scripts/grade_runs.py` on stored `experiments/*/runs.jsonl` (it also derives `failure_mode` / `final_rejections` for results stored before Phase 9). Never re-run the agent for that.
   - `runs.jsonl` lines are `{case_id, repeat, run}`; the B0 plain format is still readable.
 - `agentsville/graders/grounding.py` (B1, "is everything in the plan real?"):
   - **Code graders:**
@@ -142,10 +147,12 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
     - `trajectory_grounding`: every planned activity and day's weather must appear in a non-error tool observation.
     - `reason_references`: possessive names must be travelers, and the interests claimed must be theirs.
   - **LLM judge** `reasons_grounded`: `gpt-4.1`, one call per activity, prompt in `prompts/judges/reasons_grounded/v1.md`. It fails closed.
-- **Judge calibration:**
-  - Human labels live in `evals/datasets/calibration/reasons/<version>/items.jsonl`, immutable like golden; `load_calibration` / `write_calibration`.
-  - `harness/calibration.py` computes precision, recall, F1 and kappa, with **ungrounded as the positive class**.
-  - The committed report is `evals/cassettes/calibration/reasons-v1.0.0/gpt-4.1__v1/report.json`.
+- **Judge calibration** (every LLM judge is measured against human labels before its numbers are trusted):
+  - Human labels live in `evals/datasets/calibration/<name>/<version>/items.jsonl` (`reasons`, `relevancy`, `thought_action`), immutable like golden, each with a `CHANGELOG.md` recording the labeling rule and the owner-approved judgement calls. Loaders: `load_calibration`, `load_relevancy_calibration`, `load_thought_action_calibration`; `write_calibration` writes any item model.
+  - `harness/calibration.py`: binary judges get precision/recall/F1/kappa with **the failure to catch as the positive class** (ungrounded; inconsistent). The 1–5 relevancy judge gets ordinal agreement: exact, within-1, MAE and **quadratic weighted kappa**.
+  - Committed reports: `evals/cassettes/calibration/<name>-v1.0.0/<model>__<prompt>/report.json`. A prompt bump gets a new folder; the old report stays as history (relevancy `gpt-4.1__v1` failed at κ 0.51, `v2` is current). `calibrate_judge.py --judge all` (the default) skips a judge without a calibration set.
+  - **Pattern for judges ("LLM extracts, code decides"):** ask the LLM only for what needs judgement, give it code-computed FACTs, verify every claim code can check, and compute scores in code. The relevancy judge returns per-day `possible` facts; code checks the named option (real, unplanned, matching, affordable, non-overlapping), computes `served`, and applies the labeling rule (`score_from_days`). The thought↔action judge gets "IDENTICAL to the travel_plan sent at step N" and "prices sum to X, budget Y" facts, and an inconsistent verdict must quote the thought verbatim or it's dropped.
+  - Calibration sets are small and built from the stored runs they measure; a perfect score is optimistic (fresh data found a relevancy scoring bug: a served day must count as possible).
 - `agentsville/graders/constraints.py` (Phase 9, B2, "does the plan satisfy the hard constraints?"), all code, no LLM:
   - `weather_label_compliance`: planned activities on *really* inclement days (ambiguous ones skipped) vs the case's `must_avoid_activity_ids`.
   - `infeasible_handling` (`needs_plan=False`): only for cases with `max_affordable_activities == 0`; passes on `final_answer` + empty plan + `total_cost == 0`.
@@ -153,11 +160,17 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
   - `weather_judge_agreement`: the in-loop weather judge's verdicts (parsed from `weather_suitability` details, `"<activity_id> on …"`) vs the human labels; counts `missed` / `false_alarm`.
   - City/dates, cost accuracy and overlaps are **not** re-graded: `ConstraintMetrics` aggregates them from `CaseResult.eval_results`.
 - **Failure taxonomy** `agentsville/graders/completion.py`: `classify_failure(run)` → `None` (completed = final answer AND every error eval passed) or one `<category>:<detail>`, first matching rule wins: `llm_error:timeout|other` → `guardrail_exhausted:<eval>` → `final_failed:<eval>` → `invalid_args_loop:<tool>` (≥ 3 same-tool argument errors) → `eval_loop:<eval>` (≥ 2 `EVALS FAILED`, most frequent ✗) → `max_steps:other`. It parses observation text (`ERROR: invalid arguments for <tool>:`, `EVALS FAILED`, `✗ <eval>`), so changing those strings in `tools.py`/`evals.py` changes the taxonomy. Stored on `CaseResult.failure_mode` / `final_rejections`.
+- `agentsville/graders/relevancy.py` + `trajectory.py` (Phase 10, B3, "is it relevant, and is the reasoning faithful?"):
+  - Code: `interest_coverage_labeled` (skips `uncoverable_travelers`), `interest_match`, `weather_lookup_coverage`, `activity_lookup_coverage`, `calculator_total` (total came from a calculator call AND equals the real price sum), `verified_before_final` (the submitted plan passed `run_evals_tool`; compared via the TravelPlan model), `tool_efficiency` (`needs_plan=False`; repeated identical lookups, `error_steps`).
+  - "Before the final answer" = before the ACCEPTED final step (`trajectory.steps_before_final`); guardrail-rejected finals are ordinary steps.
+  - Judges (`gpt-4.1`, one call per run, fail closed): `traveler_relevancy` (prompt v2; 1–5 per traveler relative to what was possible each trip day, failed unit = score ≤ 2) and `thought_action_consistency` (prompt v1, `needs_plan=False`; precision 0.94 / recall 0.83, so its rate is a **lower bound**). The thought↔action input renders tool data compactly but completely (`compact_observation`) – truncating an activity list would hide the evidence.
+- **B3 metrics** (`summary.b3_relevancy` / `summary.b3_reasoning`): plan-dependent rates count only runs with a plan; efficiency, error steps and the thought↔action judge count every run. Findings: `plan/10-b3-relevancy-reasoning/b3-findings.md`.
 - **B2 metrics** (`ConstraintMetrics`, `summary.b2`): violation rates are over **produced plans** (conditional); goal completion is over **all runs**. Also guardrail rejection, steps to completion, infeasible handled, judge-vs-label agreement and the failure-mode counts. `None` for results graded before B2. Findings: `plan/09-b2-constraints/b2-findings.md`.
-- **Thresholds:** `evals/thresholds.toml` (`[b1]`, `[b2]`), with rules `max_<metric>` / `min_<metric>`. `harness/thresholds.py` `METRICS` maps metric names to values; a rule whose metric isn't there shows as "unknown rule" (a test checks the committed file has none). An unmeasured metric shows as `None`, never as a pass or a crash.
+- **Thresholds:** `evals/thresholds.toml` (`[b1]`, `[b2]`, `[b3]`), with rules `max_<metric>` / `min_<metric>`. `harness/thresholds.py` `METRICS` maps metric names to values; a rule whose metric isn't there shows as "unknown rule" (a test checks the committed file has none). An unmeasured metric shows as `None`, never as a pass or a crash. B3 judge trust bars (`JUDGE_METRICS`) read the committed calibration reports passed as `judge_reports=committed_judge_reports()`. Every threshold must pass on the B0 recording, because that's what CI replays (B3 faithfulness is at 0.50 there vs a 0.45 limit).
 - **Production-signal contracts** (`graders/signals.py`, spec in `plan/08-b1-grounding/production-signal.md`):
   - `GroundingSignal` (`b1.v1`): code graders on every production run, the reasons judge on 10%.
   - `ConstraintSignal` (`b2.v1`), `constraint_signal(run)`: built from the run alone (no labels in production, so label graders stay offline), $0. `goal_completed` follows the harness rule; `constraints` is a dict of hard eval → passed.
+  - `RelevancySignal` (`b3.v1`), `relevancy_signal(outcomes, judges_sampled)`: code graders on every run, both B3 judges on the 10% sample. "Not measured" is `null`, never `0` (a judge that examined nothing reports `null`).
 - Always read text files with `encoding="utf-8"`. The Windows default (cp1252) garbles the data's em dashes and curly quotes, and CI on Linux won't catch it.
 - `scripts/review_data.py` prints the data review tables. Findings and their implications for evals and the agent prompt are in `plan/03-data-access/data-review.md`.
 - `data/data.py`: raw mock data. Tools must not invent data beyond it.

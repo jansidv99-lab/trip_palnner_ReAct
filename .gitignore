@@ -14,3 +14,6 @@ logs/
 
 # Experiment outputs (Phase 7) – regenerate with scripts/run_experiment.py
 experiments/
+
+# Git Bash crash dumps (Windows) – never source
+*.stackdump

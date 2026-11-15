@@ -10,7 +10,11 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from agentsville.harness.calibration import CalibrationReport
+from agentsville.harness.calibration import (
+    CalibrationReport,
+    load_committed_relevancy_calibration,
+    load_committed_thought_action_calibration,
+)
 from agentsville.harness.metrics import ExperimentSummary
 from agentsville.harness.schema import ROOT
 
@@ -46,6 +50,15 @@ def _goal_completion(summary: ExperimentSummary, calibration: CalibrationReport 
     return stat.rate if stat.n else None
 
 
+# Phase 10 – Step 8: B3 getters – a RateStat field of summary.b3_relevancy / b3_reasoning
+def _b3(group: str, attr: str) -> Getter:
+    def get(summary: ExperimentSummary, calibration: CalibrationReport | None) -> float | None:
+        metrics = getattr(summary, group, None)
+        stat = getattr(metrics, attr, None) if metrics else None
+        return stat.rate if stat is not None and stat.n else None
+    return get
+
+
 def _calibration(attr: str) -> Getter:
     return lambda summary, calibration: getattr(calibration, attr) if calibration else None
 
@@ -67,7 +80,30 @@ METRICS: dict[str, Getter] = {
     "weather_label_violation_rate": _b2("weather_label_violations"),
     "weather_judge_agreement": _b2("weather_judge_agreement"),
     "goal_completion_rate": _goal_completion,
+    # Phase 10 – Step 8: B3 relevancy & reasoning
+    "interest_coverage": _b3("b3_relevancy", "interest_coverage"),
+    "relevant_rate": _b3("b3_relevancy", "relevant_rate"),
+    "weather_lookup_coverage": _b3("b3_reasoning", "weather_lookup_coverage"),
+    "verified_before_final_rate": _b3("b3_reasoning", "verified_before_final"),
+    "calculator_faithfulness": _b3("b3_reasoning", "calculator_faithfulness"),
+    "faithfulness": _b3("b3_reasoning", "faithfulness"),
+    "thought_action_inconsistency": _b3("b3_reasoning", "thought_action_inconsistency"),
+    "redundant_call_rate": _b3("b3_reasoning", "redundant_call_rate"),
+    "error_step_rate": _b3("b3_reasoning", "error_step_rate"),
 }
+
+# Phase 10 – Step 8: trust bars of the B3 judges – metric → (judge, field of its calibration report)
+JUDGE_METRICS: dict[str, tuple[str, str]] = {
+    "relevancy_judge_qwk": ("traveler_relevancy", "qwk"),
+    "thought_action_judge_recall": ("thought_action", "recall"),
+    "thought_action_judge_precision": ("thought_action", "precision"),
+}
+
+
+# Phase 10 – Step 8: the committed calibration reports of the B3 judges (missing → not measured)
+def committed_judge_reports() -> dict[str, BaseModel | None]:
+    return {"traveler_relevancy": load_committed_relevancy_calibration(),
+            "thought_action": load_committed_thought_action_calibration()}
 
 
 # Phase 8 – Step 7: one rule's verdict
@@ -85,6 +121,7 @@ def check_thresholds(
     summary: ExperimentSummary,
     calibration: CalibrationReport | None = None,
     path: Path = THRESHOLDS_FILE,
+    judge_reports: dict[str, BaseModel | None] | None = None,  # Phase 10: B3 judge trust bars
 ) -> list[ThresholdResult]:
     config = tomllib.loads(path.read_text(encoding="utf-8"))
     results = []
@@ -92,6 +129,10 @@ def check_thresholds(
         for rule, limit in rules.items():
             direction, _, metric = rule.partition("_")
             getter = METRICS.get(metric)
+            if metric in JUDGE_METRICS:  # Phase 10 – Step 8
+                judge, attr = JUDGE_METRICS[metric]
+                report = (judge_reports or {}).get(judge)
+                getter = lambda s, c, r=report, a=attr: getattr(r, a) if r else None  # noqa: E731
             if direction not in ("max", "min") or getter is None:
                 results.append(ThresholdResult(section=section, rule=rule, limit=limit, value=None,
                                                passed=None, note="unknown rule"))

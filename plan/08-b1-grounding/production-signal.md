@@ -78,3 +78,56 @@ C3 (Phase 16) alerts when an online rate exceeds its offline threshold over a ro
 
 C3 (Phase 16) alerts when `goal_completion_rate` drops below its offline threshold, or a
 violation rate exceeds its threshold, over a rolling window.
+
+---
+
+# Phase 10 – Step 9: B3 production-signal contract
+
+> Implemented as `agentsville/graders/signals.py` (`RelevancySignal`, `relevancy_signal`).
+> Logged **next to** the B1 and B2 signals for every production run. Despite the name it carries
+> both halves of B3: relevancy and reasoning faithfulness.
+
+## What every production run logs (`schema_version = "b3.v1"`)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `plan_produced` | bool | the agent returned a plan |
+| `planned_activities` / `activities_matching_nobody` | int | activities, and those matching no traveler's interest |
+| `trip_days` | int | days of the requested trip (0 without a plan) |
+| `days_without_weather_lookup` / `days_without_activity_lookup` | int | trip days never looked up before the final answer |
+| `total_from_calculator` | bool \| null | `total_cost` came from a calculator call and equals the real price sum; null without activities |
+| `verified_before_final` | bool \| null | the submitted plan passed `run_evals_tool`; null without an accepted final answer |
+| `faithful` | bool \| null | both of the above; null when either is null |
+| `lookup_calls` / `redundant_lookups` / `error_steps` | int | trajectory efficiency |
+| `judges_sampled` | bool | whether the two B3 judges ran for this run |
+| `travelers_judged` / `relevant_travelers` / `poorly_served_travelers` | int \| null | relevancy judge: travelers, scores ≥ 4, scores ≤ 2; null when not sampled or nothing to judge |
+| `mean_relevancy_score` | float \| null | mean 1–5 score |
+| `judged_steps` / `inconsistent_steps` | int \| null | thought↔action judge; null when not sampled |
+
+**Offline only:** `interest_coverage_labeled` needs the golden `uncoverable_travelers` label, which
+production traffic doesn't have.
+
+## Online grading policy
+- **Code graders on every run** ($0): interest match, lookup coverage, calculator total,
+  verified-before-final, tool efficiency.
+- **Both judges on the 10% sample** (`JUDGE_SAMPLE_RATE`), like the B1 reasons judge – about
+  2–4 cents per judged run (relevancy ~1 call, thought↔action ~1 call with the whole trajectory).
+- `inconsistent_steps` is a **lower bound**: the thought↔action judge's calibration recall is 0.83.
+
+## Metrics for C2 (Phase 15)
+
+| Metric | Formula | Offline threshold to compare with |
+|---|---|---|
+| `b3/relevant_rate` | Σ relevant_travelers ÷ Σ travelers_judged (sampled runs) | `min_relevant_rate` |
+| `b3/mean_relevancy_score` | mean of `mean_relevancy_score` weighted by travelers_judged | – |
+| `b3/weather_lookup_coverage` | 1 − Σ days_without_weather_lookup ÷ Σ trip_days | `min_weather_lookup_coverage` |
+| `b3/calculator_faithfulness` | runs with total_from_calculator ÷ runs where it isn't null | `min_calculator_faithfulness` |
+| `b3/verified_before_final_rate` | runs with verified_before_final ÷ runs where it isn't null | `min_verified_before_final_rate` |
+| `b3/faithfulness` | runs with faithful ÷ runs where it isn't null | `min_faithfulness` |
+| `b3/thought_action_inconsistency` | Σ inconsistent_steps ÷ Σ judged_steps (sampled runs) | `max_thought_action_inconsistency` |
+| `b3/redundant_call_rate` | Σ redundant_lookups ÷ Σ lookup_calls | `max_redundant_call_rate` |
+| `b3/error_step_rate` | Σ error_steps ÷ Σ steps (from the B2 signal) | `max_error_step_rate` |
+
+C3 (Phase 16) alerts when an online rate crosses its offline threshold over a rolling window.
+Worth watching first: `b3/faithfulness` (B0 recording at 50%) and `b3/thought_action_inconsistency`
+(the "says it changed the plan, sends the same plan" pattern behind B2's loops).

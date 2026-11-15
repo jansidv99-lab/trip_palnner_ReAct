@@ -4,6 +4,8 @@
     python scripts/grade_runs.py experiments/<exp>                 # record judge calls (costs)
     python scripts/grade_runs.py experiments/<exp> --mode replay   # re-grade from its cassettes
     python scripts/grade_runs.py experiments/<exp> --no-judge      # code graders only (free)
+    python scripts/grade_runs.py experiments/<exp> --record-graders thought_action_consistency
+                                                   # record ONE judge, replay all the others
 
 Grading cassettes go to experiments/<exp>/grading/; results.jsonl, summary.json and report.md
 are rewritten with the grader outcomes.
@@ -27,10 +29,15 @@ from agentsville.harness.report import render_report  # noqa: E402
 from agentsville.harness.runner import (  # noqa: E402
     grade_with_cassette,
     read_results,
+    validate_record_graders,
     write_results,
 )
 from agentsville.harness.schema import ExperimentConfig  # noqa: E402
-from agentsville.harness.thresholds import check_thresholds, thresholds_passed  # noqa: E402
+from agentsville.harness.thresholds import (  # noqa: E402
+    check_thresholds,
+    committed_judge_reports,
+    thresholds_passed,
+)
 from agentsville.llm import LLMClient  # noqa: E402
 
 
@@ -56,10 +63,19 @@ def main() -> int:
     parser.add_argument("experiment", type=Path)
     parser.add_argument("--mode", choices=["live", "record", "replay"], default="record")
     parser.add_argument("--no-judge", action="store_true", help="code graders only")
+    # Phase 10 – Step 1: record only the named LLM judges (own cassettes); others replay
+    parser.add_argument("--record-graders",
+                        help="comma-separated LLM judges to record; every other judge replays")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--check-thresholds", action="store_true")
     args = parser.parse_args()
 
+    record_graders = args.record_graders.split(",") if args.record_graders else None
+    try:
+        validate_record_graders(record_graders)
+    except ValueError as exc:
+        print(exc)
+        return 1
     folder = args.experiment
     config = ExperimentConfig.model_validate_json((folder / "config.json").read_text("utf-8"))
     dataset = load_golden(config.dataset_version)
@@ -67,7 +83,7 @@ def main() -> int:
     runs = load_runs(folder, results, dataset)
 
     base_llm = None
-    if args.mode != "replay" and not args.no_judge:
+    if (args.mode != "replay" or record_graders) and not args.no_judge:
         try:
             base_llm = LLMClient(get_settings())
         except ConfigError as exc:
@@ -80,7 +96,8 @@ def main() -> int:
         # Phase 9 – Step 1: pass the golden case so label-based graders can read it
         outcomes = grade_with_cassette(run, args.mode, cassette,
                                        base_llm, include_llm=not args.no_judge,
-                                       case=dataset.case(result.case_id))
+                                       case=dataset.case(result.case_id),
+                                       record_graders=record_graders)
         print(f"graded {result.case_id} r{result.repeat}: "
               + ", ".join(f"{n} {o.failed_units}/{o.units}" for n, o in outcomes.items()),
               flush=True)
@@ -95,7 +112,8 @@ def main() -> int:
         graded = list(pool.map(grade, results))
 
     summary = summarize(config, dataset.manifest, graded)
-    thresholds = check_thresholds(summary, load_committed_calibration())
+    thresholds = check_thresholds(summary, load_committed_calibration(),
+                                  judge_reports=committed_judge_reports())
     write_results(folder / "results.jsonl", graded)
     (folder / "summary.json").write_text(summary.model_dump_json(indent=2), encoding="utf-8")
     (folder / "report.md").write_text(render_report(summary, graded, thresholds), encoding="utf-8")
