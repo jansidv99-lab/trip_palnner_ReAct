@@ -1,0 +1,54 @@
+# Phase 7 – Step 8: Layer B eval job – replay the committed cassettes and prove repeatability.
+# No secrets and no LLM cost: every response comes from evals/cassettes/. Informational for now;
+# B4 (Phase 11) adds thresholds/baselines and makes it a required check.
+name: Evals
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ["agentsville/**", "prompts/**", "evals/**", "data/**", "scripts/run_experiment.py",
+            ".github/workflows/eval-gate.yml"]
+  push:
+    branches: [main]
+    paths: ["agentsville/**", "prompts/**", "evals/**", "data/**", "scripts/run_experiment.py",
+            ".github/workflows/eval-gate.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Phase 7 – Step 8: same inputs → same numbers (reported as "Evals / eval-replay")
+  eval-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      # Fails with exit 2 on a cassette miss (prompt/agent changed → re-record) and exit 3 if
+      # replayed results differ from the recorded expected_results.jsonl.
+      - name: Replay golden v1.0.0 and check repeatability
+        run: python scripts/run_experiment.py --mode replay --check-expected --out experiments/ci
+
+      - name: Upload experiment report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-replay-report
+          path: experiments/ci/
+          if-no-files-found: ignore

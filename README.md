@@ -41,6 +41,16 @@ python scripts/run_evals.py                  # evaluate sample_plan.json
 
 Each run is appended to `logs/agent_runs.jsonl` and typically costs 1–3 cents.
 
+## Experiments (golden dataset)
+
+```bash
+python scripts/run_experiment.py --check-expected     # replay the recorded golden v1.0.0 run: free, deterministic
+python scripts/run_experiment.py --mode live --repeats 3   # fresh runs to see variance (~$0.60)
+python scripts/compare_experiments.py experiments/<A> experiments/<B>
+```
+
+Each experiment writes a `report.md` with goal completion and per-grader pass rates (with 95% confidence intervals), cost, steps and latency.
+
 ## Tests and lint
 
 ```bash
@@ -56,6 +66,7 @@ The same lint and unit tests run in CI (GitHub Actions) on every pull request an
 ```
 agentsville/   application code (config, LLM client, models, data API, evals, tools, agent)
 prompts/       versioned system prompts (prompts/itinerary/v1.md)
+evals/         golden datasets (versioned, immutable) and recorded LLM cassettes
 data/          mock activity and weather data (the "APIs")
 scripts/       manual helper scripts
 tests/         pytest suite

@@ -1,7 +1,7 @@
 # Master Plan – AgentsVille Trip Planner (ReAct)
 
-> Status: **APPROVED v3**
-> Branch: `docs/master-plan`
+> Status: **v4 – awaiting review** (v3 approved; Phases 0–6 done)
+> Branch: `docs/master-plan-v4`
 > Source of requirements: [`goal.md`](../../goal.md)
 
 This document is the map for the whole project. It defines the phases, their order, what each one
@@ -18,6 +18,11 @@ detailed plan in its own `plan/NN-<topic>/` folder, written and reviewed before 
     - Layer B (offline evals) becomes its own phase right after the agent.
     - Layer C (drift) starts collecting traces when the agent is built, and becomes a monitoring phase after CD.
 - v3 approved with decisions Q1–Q5 (see section 7).
+- v4: `goal.md` §8 now defines the **AI Quality Assurance Platform** as Layer B **scenario slices B0–B5**
+  and Layer C pieces **C1–C3**. Old phases 7–11 are replaced by phases **7–18**:
+  - Layer B runs **offline first**: B0 → B1 → B2 → B3 → B4 (decision Q6).
+  - Then UI → CD → C1 → C2 → C3 → B5.
+  - Phases 0–6 are done and unchanged.
 
 ---
 
@@ -30,7 +35,9 @@ It works in a **ReAct loop**: it *thinks*, calls a *tool* (for example "what's t
 `final_answer_tool` with a structured `TravelPlan`. The plan is checked by **evals**: some are
 deterministic Python checks, and one uses an LLM as a judge. A **Streamlit UI** wraps it all. The
 app is tested in CI, deployed through CD to the existing GCP project, and monitored for quality and
-cost over time.
+cost over time. Quality is owned by an **AI QA platform**: deterministic tests (Layer A), offline
+probabilistic evals on a versioned golden dataset (Layer B), and production metrics, drift alerts and
+a feedback loop back into the dataset (Layer C).
 
 ---
 
@@ -46,63 +53,93 @@ cost over time.
 | **ReAct** | Reason + Act. Each turn the LLM writes a `THOUGHT` (reasoning) and an `ACTION` (one tool call). Our code runs the tool and replies with an `OBSERVATION`. This repeats until `final_answer_tool`. |
 | **CI (Continuous Integration)** | Every push or PR is automatically linted and tested, so broken code is caught before merge. |
 | **CD (Continuous Delivery/Deployment)** | Every merge to `main` automatically builds an image and deploys it, so releases are repeatable. |
+| **Golden dataset** | A fixed, versioned set of trip requests with labels (what a good plan must or must not do). Experiments are only comparable when they use the same dataset version. |
+| **Grader** | A function that scores one aspect of an agent run: code graders (pure Python) or model graders (LLM judge). Our Phase 4 evals are the first graders. |
+| **Harness** | The machinery that runs the agent over a dataset N times, applies graders, and aggregates the numbers into a comparable report. |
+| **Record/replay** | Recording every LLM request/response once ("cassettes") and replaying them later: deterministic, free and secret-free. That's how CI can run the harness. |
+| **Regression gate** | An automatic check that fails when quality drops below thresholds or falls versus a committed baseline. It blocks merges and deploys. |
 | **Drift** | Quality or cost slowly changing over time (new model version, prompt edits). We detect it by tracking eval pass rates and metrics across runs, compared to a baseline. |
 
 ---
 
-## 3. Current state (baseline)
+## 3. Current state (after Phase 6)
 
 | Item | Status |
 |---|---|
-| `models.py`: `VacationInfo`, `Traveler`, `Interest`, `TravelPlan`, `ItineraryDay`, `Activity`, `Weather`, `PromptTrace`, `OpenAIModel` | ✅ exists |
-| `data/data.py`: 24 activities (4/day), weather for 2025-06-10 → 06-15, `INCLIMATE_WEATHER_CONDITIONS` | ✅ exists |
-| `sample_plan.json`: reference `TravelPlan` | ✅ exists |
-| `requirements.txt`, `.env`, `.gitignore`, `CLAUDE.md` | ✅ exists |
-| Config loading, LLM client, evals, tools, agent, UI, tests, CI, CD | ❌ not started |
+| Phase 0–1: package layout, config, `LLMClient`, pytest/ruff, CI (`lint`, `test`) with branch protection | ✅ done |
+| Phase 2–3: validated `VacationInfo`, samples, `data_api` mock API, data review (D1–D10) | ✅ done |
+| Phase 4: 9 graders in `evals.py` (8 deterministic + `gpt-4.1` weather judge), `EvalReport` | ✅ done |
+| Phase 5: 7 tools + `ToolRegistry` (never raises, JSON observations) | ✅ done |
+| Phase 6: ReAct agent (JSON-mode replies, guardrail, prompt v1), `AgentRun` trace, `logs/agent_runs.jsonl` | ✅ done |
+| AI QA platform (Layer B harness/slices, Layer C production), UI, CD | ❌ phases 7–17 |
 
 ---
 
 ## 4. Phase overview
 
 ```
-0 Foundations ─► 1 CI ═══════════════════════════════════════════ (checks every later phase)
-      │
-      ├─► 2 Vacation details ─┐
-      └─► 3 Data access ──────┴─► 4 Evals ─► 5 Tools ─► 6 ReAct agent (+ traces)
-                                                                 │
-                                       7 Offline eval suite (B) ◄┘
-                                                                 │
-                                       8 Streamlit UI ─► 9 CD ─► 10 Monitoring & drift (C)
-                                                                 │
-                                                       11 Feedback agent (later)
+DONE    0 Foundations ─► 1 CI ═══════════ (Layer A: checks every later phase)
+        2 Vacation details ─┐
+        3 Data access ──────┴─► 4 Evals ─► 5 Tools ─► 6 ReAct agent (+ run log)
+                                                              │
+LAYER B (offline first)                                       ▼
+        7 B0 Foundation: harness · golden v1.0.0 · record/replay
+        8 B1 Hallucination & grounding
+        9 B2 Constraint compliance & goal completion
+       10 B3 Relevancy & reasoning verification
+       11 B4 Consistency · regression gating · eval-driven improvement (prompt v2)
+                                                              │
+PRODUCT & LAYER C                                             ▼
+       12 Streamlit UI (+ feedback capture) ─► 13 CD → Cloud Run (gated by B4)
+       14 C1 Structured logging + BigQuery sink
+       15 C2 Log-based metrics + dashboard
+       16 C3 Alert policies
+       17 B5 Production feedback loop & dataset lifecycle (golden v1.1.0)
+       18 Traveler feedback agent (next stage)
 ```
 
-| # | Phase | Plan folder | Depends on | Main deliverable | Why this position |
-|---|---|---|---|---|---|
-| 0 | Foundations | `plan/00-foundations/` | – | Config loader, LLM client + smoke call, pytest, ruff | The smoke call checks the `OPENAI_BASE_URL` and key on day one |
-| 1 | CI | `plan/01-ci/` | 0 | GitHub Actions: lint + tests on every PR | Cheap now; every later phase gets automatic checks (Layer A starts) |
-| 2 | Vacation details | `plan/02-vacation-info/` | 0 | Reviewed `VacationInfo`, sample trip requests | Defines the agent's input |
-| 3 | Data access & review | `plan/03-data-access/` | 0 | Mock weather/activity API functions, data review | Defines what the agent can know |
-| 4 | Evals | `plan/04-evals/` | 2, 3 | Deterministic + LLM-judge evals, `run_all_evals` | Defines "good" before building the thing that produces it. Testable on `sample_plan.json` and hand-made bad plans |
-| 5 | Tools | `plan/05-tools/` | 3, 4 | All tools **including `run_evals_tool`**, tool registry | Evals already exist, so the full tool set ships together |
-| 6 | ReAct ItineraryAgent | `plan/06-itinerary-agent/` | 5 | Prompt, parser, loop, self-check, trace logging | Built with self-checking from the start. Every run is recorded, which seeds Layer C |
-| 7 | Offline eval suite (Layer B) | `plan/07-offline-evals/` | 6 | Set of test trips, N runs/case, pass rates, prompt/model comparison | Gets agent quality right *before* anyone sees it |
-| 8 | Streamlit UI | `plan/08-streamlit-ui/` | 6 | `app.py`: form → agent → `TravelPlan` + evals + traces | Wraps a measured, tuned agent |
-| 9 | CD | `plan/09-cd/` | 1, 8 | Docker, Artifact Registry, Secret Manager, Workload Identity, Cloud Run | Deploys the finished app |
-| 10 | Monitoring & drift (Layer C) | `plan/10-monitoring/` | 6, 7, 9 | Production metrics, drift against the baseline, alerts | Needs production traffic plus a historical baseline |
-| 11 | Feedback agent (later) | `plan/11-feedback-agent/` | 6, 7 | Revision loop from traveler feedback (≥ 2 activities/day) | Next stage per `goal.md` |
+| # | Phase | Plan folder | Depends on | Question it answers / main deliverable |
+|---|---|---|---|---|
+| 0–6 | *(done, see §5)* | `plan/00-…` to `plan/06-…` | – | – |
+| 7 | **B0 – Foundation** | `plan/07-b0-foundation/` | 6 | Can we run a repeatable experiment and get comparable numbers? Golden v1.0.0, harness, record/replay, report, CI replay smoke |
+| 8 | **B1 – Hallucination & grounding** | `plan/08-b1-grounding/` | 7 | Is everything in the plan real? |
+| 9 | **B2 – Constraint compliance & goal completion** | `plan/09-b2-constraints/` | 7 | Does the plan satisfy the traveler's hard constraints? |
+| 10 | **B3 – Relevancy & reasoning verification** | `plan/10-b3-relevancy-reasoning/` | 7 | Is the plan relevant, and is its reasoning faithful to the output? |
+| 11 | **B4 – Consistency, regression gating & eval-driven improvement** | `plan/11-b4-regression-gating/` | 8–10 | Is quality stable, and does a change actually improve it? |
+| 12 | **Streamlit UI** | `plan/12-streamlit-ui/` | 6 | `app.py` + feedback capture |
+| 13 | **CD → Cloud Run** | `plan/13-cd/` | 1, 11, 12 | Repeatable, gated deploys |
+| 14 | **C1 – Structured logging + BigQuery** | `plan/14-c1-logging-bigquery/` | 13 | Can we query production? (needed by B5) |
+| 15 | **C2 – Log-based metrics + dashboard** | `plan/15-c2-metrics-dashboard/` | 9, 14 | How is production doing? (goal: after B2) |
+| 16 | **C3 – Alert policies** | `plan/16-c3-alerts/` | 11, 15 | Are we told when it degrades? (goal: after B4) |
+| 17 | **B5 – Production feedback loop & dataset lifecycle** | `plan/17-b5-feedback-loop/` | 12, 14 | How does production traffic make the evals better? |
+| 18 | Traveler feedback agent | `plan/18-feedback-agent/` | 11 | Next stage per `goal.md` |
 
 **Where each AI QA layer lives**
 
 | Layer | Where |
 |---|---|
-| A – Deterministic testing (minimal) | Tests written in **every** phase, run by **CI (Phase 1)** |
-| B – Probabilistic evals (**main**) | Eval functions in **Phase 4** → used by the agent in **Phase 6** → measured statistically in **Phase 7** |
-| C – System metrics & drift (**main**) | Traces recorded from **Phase 6** → baseline from **Phase 7** → production monitoring in **Phase 10** |
+| A – Deterministic testing (minimal) | Tests in **every** phase, run by **CI (Phase 1)**. Harness code gets unit tests with fakes. |
+| B – Probabilistic evals (**main**) | Graders from Phase 4 → harness **B0 (7)** → slices **B1–B4 (8–11)** → feedback loop **B5 (17)** |
+| C – System metrics & drift (**main**) | Run log from Phase 6 → **C1 (14)** logging/BigQuery → **C2 (15)** dashboard → **C3 (16)** alerts |
+
+**Competencies (`goal.md` §8)**
+
+| Competency | Delivered in |
+|---|---|
+| Evaluation harnesses: hallucination rate, answer relevancy | 7 (harness), 8 (hallucination rate), 10 (relevancy) |
+| Agentic / reasoning validation | 9 (goal completion), 10 (trajectory and faithfulness) |
+| Versioned golden datasets | 7 (v1.0.0), 17 (v1.1.0 lifecycle) |
+| Observability & feedback loops | 6 (run log), 12 (feedback capture), 14–16 (C1–C3), 17 (B5) |
 
 ---
 
 ## 5. Phase details
+
+> Phases 0–6 below keep their **original v3 descriptions**. What was actually built is recorded in each phase plan (`plan/00-foundations/` … `plan/06-itinerary-agent/`) and in `CLAUDE.md`. Notable differences:
+> - Phase 6 uses **JSON-mode replies** `{thought, action}` instead of free-text `THOUGHT:/ACTION:`.
+> - `AgentRun`/`AgentStep` replaced `PromptTrace`.
+> - `gpt-4.1-nano` was dropped (the proxy doesn't serve it).
+> - Old references to "Phase 7/10/11" mean today's Phases 7–11 (Layer B), 14–16 (Layer C) and 18 (feedback agent).
 
 ### Phase 0 – Foundations
 **Purpose:** shared plumbing so later phases don't each reinvent setup.
@@ -204,51 +241,96 @@ Suggested extra evals:
 
 **Learning focus:** how an agent loop really works under the hood, prompt versioning, guarding against runaway loops, testing LLM code with fakes.
 
-### Phase 7 – Offline eval suite (Layer B)
-**Purpose:** measure agent quality statistically and tune it before it's put in front of users.
-- An **eval dataset**: a fixed set of trip requests covering normal trips, tight budgets, rainy-day trips, many travelers, and narrow interests.
-- Run the agent **N times per case** (LLM output varies) and score each run with `run_all_evals`.
-- Report **pass rate per eval and per case**, average cost, steps and latency.
-- Compare **prompt versions** and **models** (`gpt-4.1` / `-mini` / `-nano`) side by side, and compare runs with and without self-checking.
-- Save the result as the **baseline** for drift detection in Phase 10.
-- Runs on demand (it costs money), not on every PR.
+### Slice anatomy (Layer B slices B1–B4)
+Each slice delivers the same six parts (`goal.md`: *golden data → graders → harness run → thresholds → CI → production signal*):
+1. **Golden data:** cases + labels for that quality question, added to the versioned dataset.
+2. **Graders:** code and/or LLM judge. Every LLM judge is **calibrated** against human labels (agreement measured).
+3. **Harness run:** an experiment on the golden dataset, N repeats, producing a report.
+4. **Thresholds:** minimum acceptable rates in `evals/thresholds.toml`.
+5. **CI:** the slice's checks run in **replay mode** (recorded cassettes): free, deterministic, no secret.
+6. **Production-signal contract:** the exact log field/metric Layer C will emit. With the offline-first order (Q6) this is a written spec in B1–B4, made live in C1–C3 and used in B5.
 
-**Learning focus:** why one run proves nothing for an LLM, pass rates and variance, evidence-based prompt iteration.
+### Phase 7 – B0 Foundation: harness, golden dataset v1.0.0, record/replay
+**Question:** can we run a repeatable experiment and get comparable numbers?
+- **Golden dataset v1.0.0** (`evals/datasets/golden/v1.0.0/`): about 12–15 cases (normal, tight budget, rainy days, theatre-only, one-day, large group, infeasible budget) with labels (must-avoid activity IDs, achievable interest coverage, expected behavior). It includes `manifest.json` (version, content hash) and `CHANGELOG.md`. A released version is immutable.
+- **Harness** (`agentsville/harness/`): `dataset.py` (load/validate/hash), `runner.py` (experiment = dataset version × model × prompt version × N repeats → runs + grader scores), `metrics.py` (pass rate per grader with confidence intervals, cost, steps, latency, stop-reason mix), `report.py` (markdown report; compare two experiments).
+- **Record/replay** (`recording.py`): `RecordingLLM` / `ReplayLLM` wrap `LLMClient`. Cassettes are keyed by a hash of (messages, model, params), and a replay miss is an error. Cassettes are committed under `evals/cassettes/`.
+- **CI:** `eval-gate.yml` runs a replay smoke experiment on PRs (no secret, no cost).
+- Scripts: `run_experiment.py`, `compare_experiments.py`. Outputs go to the git-ignored `experiments/`.
 
-### Phase 8 – Streamlit UI
-**Purpose:** make the agent usable by a non-developer. (UI only, no deployment concerns.)
-- Form: travelers (name, age, interests), dates (limited to the data window), budget, model choice (`OpenAIModel`).
-- Validate into `VacationInfo` and show Pydantic errors inline.
-- **Explain the cost rule to the user (Q4):** a note near the budget input and next to the total, for example *"Total cost = sum of activity prices (per group, not per traveler)"*.
-- "Generate itinerary" button → run the agent with a progress view of THOUGHT/ACTION/OBSERVATION steps.
-- Show the `TravelPlan` (day cards with weather and activities), the total vs budget, eval results, and a prompt-trace inspector.
-- Run locally with `streamlit run app.py`.
+### Phase 8 – B1 Hallucination & grounding
+**Question:** is everything in the plan real?
+- Graders: activity existence and field fidelity (existing E4), weather fidelity (X1), a **reasons-grounded LLM judge** (each recommendation reason is supported by the activity, the traveler interests or the weather), and **trajectory grounding** (every planned activity appeared in a tool observation during the run).
+- Judge calibration vs hand-labeled reasons (precision/recall, agreement).
+- Metrics: **hallucination rate** (activity- and plan-level), grounded-reason rate. Production signal: per-run hallucination flags.
+
+### Phase 9 – B2 Constraint compliance & goal completion
+**Question:** does the plan satisfy the traveler's hard constraints?
+- Graders: city/dates, budget, cost accuracy, overlaps, weather suitability (judge), minimum activities; **goal completion** (finished with `final_answer` and passed evals); expected behavior on **infeasible** cases (budget too small).
+- Metrics: per-constraint violation rate, all-constraints-pass rate, goal-completion rate, guardrail-rejection rate. Production signal: per-run constraint results (feeds C2).
+
+### Phase 10 – B3 Relevancy & reasoning verification
+**Question:** is the plan relevant to these travelers, and is its step-by-step reasoning faithful to the output?
+- **Answer relevancy:** an LLM judge with a 1–5 rubric per traveler, plus interest coverage.
+- **Reasoning/trajectory validation:** weather fetched for every day, total computed with the calculator, evals run before the final answer, a thought↔action consistency judge, tool-use efficiency (redundant calls, steps to completion).
+- Metrics: relevancy score, faithfulness rate, redundant-call rate.
+
+### Phase 11 – B4 Consistency, regression gating & eval-driven improvement
+**Question:** is quality stable across runs, and does a change actually improve it?
+- Consistency: variance across repeats, **pass@k / pass^k**.
+- **Baselines** committed per dataset version and config; **regression gate** (`gate.py`): thresholds + baseline delta → exit code.
+- `eval-gate.yml` becomes a **required check**: replay on every PR; live runs nightly or on demand with the `OPENAI_API_KEY` GitHub secret (you set it up).
+- **Eval-driven improvement:** prompt **v2** built from observed failures (e.g. the rainy-day empty slot), with hypothesis → experiment → significance check → promote baseline.
+
+### Phase 12 – Streamlit UI
+**Purpose:** make the agent usable by a non-developer (`goal.md` §6).
+- Form: travelers (name, age, interests), dates (limited to the data window), budget, model choice (`OpenAIModel`). Validate into `VacationInfo` with inline Pydantic errors.
+- **Explain the cost rule (Q4)** near the budget and the total; hint when an interest has no activities (theatre).
+- "Generate itinerary" → live THOUGHT/ACTION/OBSERVATION progress → `TravelPlan` day cards, total vs budget, eval report, trace inspector.
+- **Feedback capture** (thumbs up/down + comment per plan), needed by B5.
 
 **Learning focus:** Streamlit's rerun model and `st.session_state`.
 
-### Phase 9 – CD (Continuous Delivery/Deployment)
-**Purpose:** every merge to `main` produces a running, up-to-date app on GCP without manual steps.
-- `Dockerfile` for the Streamlit app (slim Python base, non-root user, listens on `$PORT`).
-- Build the image and push it to **Artifact Registry** in the existing project/region.
-- Store `OPENAI_API_KEY` in **Secret Manager** and inject it at runtime. It's never baked into the image.
-- Deploy to **Cloud Run** from a GitHub Actions workflow that runs only after CI passes on `main`.
-- Authenticate GitHub → GCP with **Workload Identity Federation** (no long-lived JSON keys).
-- Rollback through Cloud Run revisions: shift traffic back to the previous revision.
-- You run the GCP/GitHub setup commands yourself. I provide them.
+### Phase 13 – CD → Cloud Run
+**Purpose:** every merge to `main` produces a running, up-to-date app on GCP (`goal.md` §7).
+- `Dockerfile` (slim base, non-root, `$PORT`); image in **Artifact Registry** (existing project/region).
+- `OPENAI_API_KEY` in **Secret Manager**, injected at runtime, never baked into the image.
+- Deploy workflow runs only after **CI and the B4 eval gate** pass on `main`; GitHub → GCP via **Workload Identity Federation** (no JSON keys).
+- Rollback via Cloud Run revisions. You run the GCP/GitHub setup commands; I provide them.
 
-**Learning focus:** containers, secret handling, keyless auth, revision-based rollback.
+### Phase 14 – C1 Structured logging + BigQuery sink
+**Question:** can we query production?
+- `observability.py`: structured JSON logs for Cloud Logging (run summary, grader scores, feedback events, trace IDs), following the B1–B3 production-signal contracts.
+- **Online graders:** deterministic graders on every production run; LLM judges sampled to control cost.
+- Log sink → **BigQuery** dataset (needed by B5).
 
-### Phase 10 – Monitoring & drift (Layer C)
-**Purpose:** know whether the app stays good and affordable in production.
-- Send production traces (the same `PromptTrace` + eval result format as Phase 6) to Cloud Logging, then BigQuery for analysis.
-- Metrics: latency, tokens, cost per run, steps per run, eval pass rate, error and timeout rate.
-- **Drift detection:** compare rolling production metrics to the Phase 7 baseline, and alert when pass rate drops or cost rises past a threshold.
-- A small dashboard (Looker Studio or a Streamlit admin page, decided in that phase's plan).
+### Phase 15 – C2 Log-based metrics + dashboard
+**Question:** how is production doing right now?
+- Log-based metrics (online hallucination / constraint / completion rates, cost per run, latency, errors) and a Cloud Monitoring dashboard.
 
-**Learning focus:** what to measure for an AI system in production, baselines and thresholds, structured logging.
+### Phase 16 – C3 Alert policies
+**Question:** are we told when it degrades?
+- Alerts on drift vs the B4 baseline, cost per run, error rate and latency.
 
-### Phase 11 – Traveler feedback agent (next stage, not in current scope)
-Incorporate traveler feedback on the initial itinerary (for example "at least 2 activities per day"), add a stronger-model eval that checks the feedback was honored, and re-run the ReAct loop to revise. The Phase 7 suite measures the improvement.
+### Phase 17 – B5 Production feedback loop & dataset lifecycle
+**Question:** how does production traffic make the evals better?
+- BigQuery queries → sample and triage (low grader scores, thumbs-down) → label → **golden v1.1.0** (manifest + changelog) → re-baseline.
+- Compare offline vs online rates to detect dataset blind spots.
+
+### Phase 18 – Traveler feedback agent (next stage, not in current scope)
+Incorporate traveler feedback on the initial itinerary (at least 2 activities per day), add a stronger-model eval that checks the feedback was honored, and re-run the ReAct loop to revise. The B4 gate measures the improvement.
+
+### Target layout for phases 7+ (finalized in each phase plan)
+```
+agentsville/harness/   dataset.py  recording.py  runner.py  metrics.py  report.py  gate.py
+agentsville/graders/   grounding.py (B1)  constraints.py (B2)  relevancy.py, trajectory.py (B3)
+evals/                 datasets/golden/v1.0.0/  cassettes/  thresholds.toml  baselines/
+experiments/           (git-ignored)
+scripts/               run_experiment.py  compare_experiments.py  eval_gate.py
+.github/workflows/     eval-gate.yml
+app.py  Dockerfile  agentsville/observability.py
+```
+Reused, not rebuilt: `run_all_evals`/`EvalResult` (graders), `AgentRun`/`log_run` (run record), `samples.py` and data-review findings (golden seeds and labels), `LLMClient` (wrapped for record/replay), `tests/test_evals_live.py` cases (first human labels).
 
 ---
 
@@ -273,3 +355,4 @@ For every phase:
 | Q3 | `VacationInfo` restricts dates to 2025-06-10 → 06-15 and the destination to AgentsVille | Phase 2 |
 | Q4 | `total_cost` = **plain sum of activity prices** (matches `sample_plan.json`: 108 = 108), **not** multiplied by the number of travelers. The UI states this rule clearly to the user | Phase 4 (cost eval), Phase 6 (prompt), Phase 8 (UI) |
 | Q5 | **Open: revisit.** Flat files vs an `agentsville/` package will be compared and decided in the Phase 0 plan | Phase 0 |
+| Q6 | **v4 ordering: Layer B offline first** (B0–B4), then UI → CD → C1–C3 → B5. In B1–B4 the "production signal" is a written contract implemented in C1–C3 | Phases 7–17 |

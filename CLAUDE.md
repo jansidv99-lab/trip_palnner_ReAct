@@ -37,9 +37,14 @@ pytest tests/test_config.py::test_prompt_version_lowercased   # single test
 pytest -m llm                                # opt-in tests that call the real LLM (cost money)
 python scripts/smoke_llm.py [model]          # manual check that key/endpoint/model work
 python scripts/run_agent.py [--sample rainy]  # real agent run, printed step by step
+python scripts/run_experiment.py --check-expected   # replay golden v1.0.0 (free) + repeatability check
+python scripts/run_experiment.py --mode record      # re-record cassettes after prompt/agent changes (~$0.20)
+python scripts/compare_experiments.py experiments/A experiments/B
 ```
 
-CI (`.github/workflows/ci.yml`) runs two jobs on every PR and push to `main`: `lint` (`ruff check .`) and `test` (`pytest`). Both are required checks on `main`. `llm`-marked tests never run in CI, and CI uses no secrets. Run both locally before committing.
+CI (`.github/workflows/ci.yml`) runs two jobs on every PR and push to `main`: `lint` (`ruff check .`) and `test` (`pytest`). Both are required checks on `main`. `llm`-marked tests never run in CI, and CI uses no secrets.
+`.github/workflows/eval-gate.yml` (`Evals / eval-replay`, informational until Phase 11) replays the
+committed cassettes and fails if replayed results differ from `expected_results.jsonl`. Run both locally before committing.
 
 `pytest.ini` sets `pythonpath = .`, registers the `llm` marker and skips it by default. Tests never touch the network unless marked `@pytest.mark.llm`; unit tests use `FakeOpenAIClient` from `tests/conftest.py` and `load_settings({...})` instead of the real `.env`.
 
@@ -92,6 +97,23 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
   - **Run log:** each run is appended as one JSON line to `logs/agent_runs.jsonl` (git-ignored; `log_path=None` disables it).
 - `agentsville/prompts.py` + `prompts/itinerary/<version>.md`: the system prompt is a versioned file selected by `PROMPT_VERSION`. `{{TOOL_CATALOG}}` and `{{TRAVEL_PLAN_SCHEMA}}` are filled by plain string replacement (JSON braces break `str.format`), and HTML comments are stripped. Agent tests use `ScriptedLLM` in `tests/test_agent.py`, which replays JSON replies and answers judge calls separately.
 - `scripts/run_agent.py [--sample default|tight|rainy] [--model M] [--max-steps N] [--no-log]` shows a real run step by step (~1–3 cents, 1–2 min).
+- `agentsville/harness/` (Phase 7, B0): the Layer B experiment harness.
+  - `dataset.py`: golden datasets in `evals/datasets/golden/<version>/` (`cases.jsonl`, `manifest.json`, `CHANGELOG.md`).
+    - **Released versions are immutable.** `load_golden` verifies the cases' sha256 and a fingerprint of `data/data.py`, and refuses to load on a mismatch.
+    - Never edit a released version: run a new `scripts/build_golden_dataset.py`-style build for v1.1.0/v2.0.0.
+    - Labels: `must_avoid_activity_ids`, `ambiguous_activity_ids`, `uncoverable_travelers`, `max_affordable_activities`, `expected_behavior`.
+  - `recording.py`: `CassetteLLM(mode, cassette, llm, default_model)` is a drop-in for `LLMClient.chat`, with modes `live` | `record` | `replay`.
+    - Keys are the sha256 of (model, LF-normalized messages, temperature, json_mode). A repeated request is stored per occurrence, and recorded LLM errors replay as `LLMError`.
+    - A replay miss raises `CassetteMissError`, which means the prompt, agent code or data changed. Re-record with `--mode record` and commit the new cassettes.
+  - `runner.py`: `run_experiment(ExperimentConfig, ...)` runs cases × repeats in a thread pool, with one cassette per (case, repeat) under `evals/cassettes/golden-<ver>/<config_id>/`.
+    - Record mode also writes `expected_results.jsonl`.
+    - Outputs go to the git-ignored `experiments/<ts>__<config_id>/`: `config.json`, `results.jsonl`, `runs.jsonl`, `summary.json`, `report.md`.
+  - `metrics.py`: Wilson 95% intervals and `ExperimentSummary`.
+    - Goal completion = `final_answer` AND all error graders passed.
+    - A run without a plan counts as a failure for every grader.
+  - `report.py`: `render_report` builds the markdown report. `compare` refuses different dataset versions or hashes unless `force=True`, and calls a difference "likely real" only when the intervals don't overlap.
+  - **Line endings matter:** `.gitattributes` forces LF for `prompts/**` and `evals/**`, and `prompts.py` LF-normalizes too. Hashes must match between Windows (`core.autocrlf=true`) and Linux CI.
+  - Harness tests use `tests/harness_fakes.py` (`ConversationFake`, `make_dataset`).
 - Always read text files with `encoding="utf-8"`. The Windows default (cp1252) garbles the data's em dashes and curly quotes, and CI on Linux won't catch it.
 - `scripts/review_data.py` prints the data review tables. Findings and their implications for evals and the agent prompt are in `plan/03-data-access/data-review.md`.
 - `data/data.py`: raw mock data. Tools must not invent data beyond it.
