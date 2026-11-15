@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Workflow rules
 
-1. **Plan first:** before every step, write a detailed plan doc under `plan/` that explains each topic clearly. Keep plans organized by stage in numbered folders, e.g. `plan/00-master/`, `plan/01-vacation-info/`, `plan/02-tools/`.
+1. **Plan first:** before every step, write a detailed plan doc under `plan/` that explains each topic clearly. Keep plans organized by stage in numbered folders, e.g. `plan/00-master/`, `plan/01-vacation-info/`, `plan/02-tools/`.plans will have steps with clear purpose , output and dependence_on .
    Add new stage folders whenever needed, keeping the numeric prefix and never mixing topics.
 2. **Review:** ask the user to review each plan doc before implementing it.
 3. **Permission:** always ask for permission before making any change to code.
@@ -25,11 +25,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
+Python 3.11 in a local `.venv` (Windows paths shown; run everything from the repo root):
+
 ```bash
-pip install -r requirements.txt   # Python deps (streamlit, openai, pydantic v2, python-dotenv)
+py -3.11 -m venv .venv && .venv\Scripts\activate
+pip install -r requirements-dev.txt          # runtime deps + pytest + ruff
+
+ruff check .                                 # lint (config in ruff.toml)
+pytest                                       # unit tests; `llm`-marked tests are skipped by default
+pytest tests/test_config.py::test_prompt_version_lowercased   # single test
+pytest -m llm                                # opt-in tests that call the real LLM (cost money)
+python scripts/smoke_llm.py [model]          # manual check that key/endpoint/model work
 ```
 
-No app entry point, test suite, or linter exists yet. Add run/test commands here once they are created.
+`pytest.ini` sets `pythonpath = .`, registers the `llm` marker and skips it by default. Tests never touch the network unless marked `@pytest.mark.llm`; unit tests use `FakeOpenAIClient` from `tests/conftest.py` and `load_settings({...})` instead of the real `.env`.
 
 ## Configuration
 
@@ -37,7 +46,11 @@ No app entry point, test suite, or linter exists yet. Add run/test commands here
 
 ## Architecture
 
-- `models.py`: the single source of truth for data shapes, shared by the agent, tools, evals, and UI.
+Application code lives in the `agentsville/` package (imports: `from agentsville.models import ...`); mock data stays in `data/` (`from data.data import ...`); `pytest` resolves imports via `pythonpath = .` in `pytest.ini`.
+
+- `agentsville/config.py`: `get_settings()` (cached) loads `.env` then real env vars (env wins) into a frozen `Settings`; raises `ConfigError` listing missing vars. `load_settings(mapping)` is the pure, testable core.
+- `agentsville/llm.py`: `LLMClient.chat()` is the **only** place that calls the OpenAI SDK. Returns `LLMResponse` (text, latency, tokens, estimated cost) and wraps all SDK failures in `LLMError`. Inject a fake via `LLMClient(settings, client=...)`. The Vocareum proxy accepts `gpt-4o-mini`, `gpt-4.1-mini`, `gpt-4.1`; `gpt-4.1-nano` returns 404.
+- `agentsville/models.py`: the single source of truth for data shapes, shared by the agent, tools, evals, and UI.
   - Input: `VacationInfo` → `Traveler` → `Interest` (enum). Validators enforce departure ≥ arrival, budget > 0, and ≥ 1 interest per traveler.
   - Output: `TravelPlan` → `ItineraryDay` → `ActivityRecommendation` → `Activity` + `Weather`. The agent's `final_answer_tool` must produce JSON that validates as `TravelPlan`; `sample_plan.json` is a reference example.
   - `PromptTrace`: one LLM call's prompts, raw reply, parsed plan, latency, tokens, and cost. Used for observability (QA layer C).
