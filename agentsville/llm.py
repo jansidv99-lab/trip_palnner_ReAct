@@ -32,7 +32,7 @@ class LLMError(RuntimeError):
     """Raised when an LLM call fails."""
 
 
-# Phase 0 – Step 5: reply text plus call metrics (same fields as PromptTrace)
+# Phase 0 – Step 5: reply text plus call metrics (copied into AgentStep by the agent)
 class LLMResponse(BaseModel):
     text: str
     model: str
@@ -64,6 +64,11 @@ class LLMClient:
             timeout=DEFAULT_TIMEOUT_S,
             max_retries=DEFAULT_MAX_RETRIES,
         )
+
+    # Phase 6 – Step 2: the model used when chat() gets no explicit model (recorded in runs)
+    @property
+    def default_model(self) -> str:
+        return self._default_model
 
     # Phase 0 – Step 5: send messages, time the call, return text + metrics
     # Phase 4 – Step 4: optional JSON mode – the reply is guaranteed to be a JSON object

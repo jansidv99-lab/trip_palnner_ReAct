@@ -36,6 +36,7 @@ pytest                                       # unit tests; `llm`-marked tests ar
 pytest tests/test_config.py::test_prompt_version_lowercased   # single test
 pytest -m llm                                # opt-in tests that call the real LLM (cost money)
 python scripts/smoke_llm.py [model]          # manual check that key/endpoint/model work
+python scripts/run_agent.py [--sample rainy]  # real agent run, printed step by step
 ```
 
 CI (`.github/workflows/ci.yml`) runs two jobs on every PR and push to `main`: `lint` (`ruff check .`) and `test` (`pytest`). Both are required checks on `main`. `llm`-marked tests never run in CI, and CI uses no secrets. Run both locally before committing.
@@ -55,7 +56,6 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
 - `agentsville/models.py`: the single source of truth for data shapes, shared by the agent, tools, evals, and UI.
   - Input: `VacationInfo` → `Traveler` → `Interest` (enum). Validators enforce: ≥ 1 traveler, ≥ 1 interest each, age 0–120, budget > 0, departure ≥ arrival, both dates within `TRIP_WINDOW_START`–`TRIP_WINDOW_END` (2025-06-10 → 06-15), and destination = `SUPPORTED_DESTINATION` (any casing, normalized to "AgentsVille"). Duplicate traveler names are allowed by design. The window constants are fixed, and `tests/test_models.py` checks they match `data/data.py`.
   - Output: `TravelPlan` → `ItineraryDay` → `ActivityRecommendation` → `Activity` + `Weather`. The agent's `final_answer_tool` must produce JSON that validates as `TravelPlan`; `sample_plan.json` is a reference example.
-  - `PromptTrace`: one LLM call's prompts, raw reply, parsed plan, latency, tokens, and cost. Used for observability (QA layer C).
   - `OpenAIModel`: models selectable in the UI (`gpt-4o-mini` default, `gpt-4.1-mini`, `gpt-4.1`). Every member must have a price in `llm.PRICES_PER_1M_TOKENS` (enforced by a test). `config.MODEL` stays free-form.
 - `agentsville/samples.py`: factory functions returning fresh `VacationInfo` objects. `sample_vacation_info()` matches `sample_plan.json` (Yuri + Hiro, 06-10 → 06-12, budget 130); `tight_budget_vacation_info()` and `rainy_days_vacation_info()` cover edge cases.
 - `agentsville/data_api.py`: the mock weather and activity API, and the **only** module that reads `data/data.py`. Evals, tools and the agent must go through it.
@@ -81,6 +81,17 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
   - `registry.catalog()` renders the tool list for the system prompt. `travel_plan` arguments refer to a TravelPlan schema the prompt must include.
   - **To add a tool:** define a Pydantic args model and a `(args, context) -> ToolResult` function, then add a `Tool(...)` entry in `build_default_registry()`.
   - `scripts/try_tools.py [--catalog] [--llm]` runs sample ACTIONs through the registry.
+- `agentsville/agent.py`: `ItineraryAgent(llm, ...).run(vacation_info) -> AgentRun`, the ReAct loop.
+  - **Reply format:** each reply is ONE JSON object `{"thought": ..., "action": {"tool_name": ..., "arguments": {...}}}`, requested with `json_mode=True`. We switched from free-text `THOUGHT:/ACTION:` because gpt-4o-mini miscounted brackets in the ~6k-char final plan and looped until `max_steps`; JSON mode guarantees valid JSON. `parse_agent_reply` raises `ReplyParseError` with guidance, which the loop sends back as the observation.
+  - **Each step:** the tool's observation goes back as a user message `"OBSERVATION: …"`.
+  - **Guardrail:** a `final_answer_tool` plan that fails the deterministic evals is rejected, up to `max_final_rejections=2`. After that it's accepted, and the failure shows in `final_eval_report`.
+  - **Stop reasons:** `final_answer` | `max_steps` (default 20) | `llm_error`.
+  - **Final evals:** the accepted plan always gets `run_all_evals` (including the judge when `include_llm_evals`).
+  - **Judge cost metering:** judge calls made by evals go through `_MeteredLLM`, so `AgentRun.judge_calls` and `judge_cost_usd` are counted in `total_cost_usd`.
+  - **`AgentRun` is the trace:** prompts, `steps: list[AgentStep]`, stop reason, plan, eval report, and computed token/latency/cost totals. It replaced the old single-call `PromptTrace`.
+  - **Run log:** each run is appended as one JSON line to `logs/agent_runs.jsonl` (git-ignored; `log_path=None` disables it).
+- `agentsville/prompts.py` + `prompts/itinerary/<version>.md`: the system prompt is a versioned file selected by `PROMPT_VERSION`. `{{TOOL_CATALOG}}` and `{{TRAVEL_PLAN_SCHEMA}}` are filled by plain string replacement (JSON braces break `str.format`), and HTML comments are stripped. Agent tests use `ScriptedLLM` in `tests/test_agent.py`, which replays JSON replies and answers judge calls separately.
+- `scripts/run_agent.py [--sample default|tight|rainy] [--model M] [--max-steps N] [--no-log]` shows a real run step by step (~1–3 cents, 1–2 min).
 - Always read text files with `encoding="utf-8"`. The Windows default (cp1252) garbles the data's em dashes and curly quotes, and CI on Linux won't catch it.
 - `scripts/review_data.py` prints the data review tables. Findings and their implications for evals and the agent prompt are in `plan/03-data-access/data-review.md`.
 - `data/data.py`: raw mock data. Tools must not invent data beyond it.
