@@ -19,10 +19,10 @@ merge to main ─▶ Deploy workflow
 ## Is it healthy?
 
 ```bash
-gcloud run services describe agentsville --region "$REGION" \
+gcloud run services describe trip-planner-react --region "$REGION" \
   --format 'value(status.url,status.latestReadyRevisionName)'
-curl -fsS "$(gcloud run services describe agentsville --region "$REGION" --format 'value(status.url)')/_stcore/health"
-gcloud run services logs read agentsville --region "$REGION" --limit 50
+curl -fsS "$(gcloud run services describe trip-planner-react --region "$REGION" --format 'value(status.url)')/_stcore/health"
+gcloud run services logs read trip-planner-react --region "$REGION" --limit 50
 ```
 Feedback events (Phase 13 – Step 2) in Cloud Logging:
 ```bash
@@ -33,11 +33,11 @@ gcloud logging read 'resource.type="cloud_run_revision" AND jsonPayload.event="f
 
 ```bash
 # list revisions, newest first (the commit-sha label tells you which commit each one runs)
-gcloud run revisions list --service agentsville --region "$REGION" \
+gcloud run revisions list --service trip-planner-react --region "$REGION" \
   --format 'table(metadata.name,metadata.labels.commit-sha,status.conditions[0].status,metadata.creationTimestamp)'
 
 # send all traffic to a known-good revision
-gcloud run services update-traffic agentsville --region "$REGION" --to-revisions <REVISION>=100
+gcloud run services update-traffic trip-planner-react --region "$REGION" --to-revisions <REVISION>=100
 ```
 A rollback sticks until the next deploy, which sends traffic to the new revision again. Fix forward
 with a `fix/…` branch, or revert the bad commit on `main`.
@@ -46,17 +46,17 @@ with a `fix/…` branch, or revert the bad commit on `main`.
 
 ```bash
 read -rsp "New value: " VALUE; echo
-printf '%s' "$VALUE" | gcloud secrets versions add openai-api-key --data-file=-   # or app-passcode
+printf '%s' "$VALUE" | gcloud secrets versions add trip-planner-react-openai-key --data-file=-   # or trip-planner-react-passcode
 unset VALUE
 gh workflow run deploy.yml --ref main   # new revision reads :latest at start-up
 ```
-Old versions can be disabled with `gcloud secrets versions disable <N> --secret openai-api-key`.
+Old versions can be disabled with `gcloud secrets versions disable <N> --secret trip-planner-react-openai-key`.
 
 ## Unexpected spend or abuse
 
 1. Change the passcode (above) – everyone has to enter the new one.
 2. Or make the service private (only IAM-authorized callers):
-   `gcloud run services update agentsville --region "$REGION" --no-allow-unauthenticated`
-   and open it yourself with `gcloud run services proxy agentsville --region "$REGION"`.
+   `gcloud run services update trip-planner-react --region "$REGION" --no-allow-unauthenticated`
+   and open it yourself with `gcloud run services proxy trip-planner-react --region "$REGION"`.
 3. The next deploy re-applies `--allow-unauthenticated`; remove that flag from `deploy.yml` if the
    service should stay private.

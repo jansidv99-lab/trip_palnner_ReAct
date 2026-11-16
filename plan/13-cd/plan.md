@@ -1,9 +1,12 @@
 # Phase 13 – CD → Cloud Run
 
-> Status: **IN PROGRESS** – approved 2026-11-16 (Q1–Q9 = recommendations); Steps 1–7 implemented,
-> Step 8 after merge. Owner decision 2026-11-16: **no local Docker build/run** – the image is
-> built and verified only by the CI `container` job and the deploy pipeline; testing happens on
-> the deployed app.
+> Status: **IN PROGRESS** – approved 2026-11-16 (Q1–Q9 = recommendations); Steps 1–7 merged
+> (PR #15); Step 8 under way. Owner decision 2026-11-16: **no local Docker build/run** – the image
+> is built and verified only by the CI `container` job and the deploy pipeline (Cloud Build for the
+> first manual deploy); testing happens on the deployed app.
+> **Follow-up `fix/cd-trip-planner-react-names`:** see [Step 8 log](#step-8-log-2026-11-16) – the
+> GCP names below (`agentsville`, `openai-api-key`, `app-passcode`, `agentsville-run`,
+> `github-deployer`, pool `github`) were replaced by `trip-planner-react*` names.
 > Branch: `feature/phase-13-cloud-run-cd` (from `main` after Phase 12 merged, PR #14)
 > Master plan: [`plan/00-master/master-plan.md`](../00-master/master-plan.md) (v5: 12 → **13** → 11)
 > Depends on: Phase 1 (CI) ✅, Phase 7 (eval replay) ✅, Phase 12 (Streamlit UI, Steps 1–6) ✅ –
@@ -190,6 +193,26 @@ required-check names on `main`) unchanged.
 | access | gate shown only when `APP_PASSCODE` is set; wrong code → error, no form; right code → form; constant-time compare |
 | AppTest | passcode screen hides the form and never builds a backend; after unlocking the existing flows still pass |
 | container | CI job builds the image and gets 200 from `/_stcore/health` |
+
+#### Step 8 log (2026-11-16)
+1. **Name collision found before the first deploy.** The project already hosts a separate
+   AgentsVille app (Cloud Run `agentsville-trip-planner`, from another repo) that owns the Artifact
+   Registry repo `agentsville`, and an `openai-api-key` secret belongs to yet another app. Using
+   the planned names would have (a) let our cleanup policy delete that app's images (policies are
+   per repository) and (b) put our key into another app's secret. Decision: every resource of
+   this app is prefixed **`trip-planner-react`**; the WIF provider goes into the existing pool
+   `github-pool` (one provider per repo, as the other repos do).
+2. **Manual first deploy** (owner: "deploy to cloud first"): registry repo, runtime SA and both
+   secrets created; image built with `gcloud builds submit` (Cloud Build, no local Docker) and
+   deployed as revision `trip-planner-react-00001-wdh` (tag `10915f2-manual1`). Health 200, page
+   200, passcode gate on.
+3. **First `Deploy` run after the merge failed** at `google-github-actions/auth`: the repo
+   variables (§6 of `gcp-setup.md`) weren't set, so `workload_identity_provider` was empty. No
+   GCP change happened. The merged `deploy.yml` still had the old names, so it must not run
+   before this fix.
+4. **Fix:** provider `github-trip-planner-react` + SA `trip-planner-react-deployer` created (§4–5
+   of `gcp-setup.md`); `deploy.yml`, `gcp-setup.md`, `runbook.md`, CLAUDE.md renamed. Remaining:
+   repo variables (owner), merge, green `Deploy` run, real-model checks, rollback rehearsal.
 
 ---
 

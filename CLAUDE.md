@@ -27,8 +27,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Current state
 
 Phases 0–10 and 12 (Streamlit UI, Steps 1–6) are merged. **Phase 13 – CD → Cloud Run**
-(`plan/13-cd/`) is in progress on `feature/phase-13-cloud-run-cd`; the first deploy and the
-real-model checks (incl. the postponed Phase 12 Step 7) happen after its merge. Roadmap order
+(`plan/13-cd/`) Steps 1–7 are merged (PR #15); Step 8 (first pipeline deploy, real-model checks
+incl. the postponed Phase 12 Step 7, rollback rehearsal) is in progress – see the Step 8 log in
+`plan/13-cd/plan.md`. A manual revision already serves Cloud Run `trip-planner-react`. Roadmap order
 (master plan v5): 12 → 13 → 11 (B4) → 14–18. Phase numbers are stable IDs, not execution order, so
 "until Phase 11" below means after 12 and 13.
 
@@ -74,7 +75,7 @@ CI (`.github/workflows/ci.yml`) runs on every PR and push to `main`: `lint` (`ru
 `.github/workflows/eval-gate.yml` (`Evals / eval-replay`, informational until Phase 11) replays the
 committed cassettes and fails if replayed results differ from `expected_results.jsonl`. It
 also replays the judge calibration, and shows threshold verdicts (`continue-on-error` until B4). Run both locally before committing.
-`.github/workflows/deploy.yml` (Phase 13) runs on every push to `main`: it calls `ci.yml` and `eval-gate.yml` as reusable workflows (`workflow_call`, so the eval path filter can't skip the gate), then builds the image on the runner, pushes `…/agentsville/app:<sha>` to Artifact Registry and deploys Cloud Run service `agentsville` (WIF auth, no JSON keys; secrets `openai-api-key` / `app-passcode` from Secret Manager; settings from GitHub repo variables). The concurrency groups in `ci.yml` / `eval-gate.yml` carry `ci-` / `evals-` prefixes because inside a called workflow `github.workflow` is the caller's name – keep them distinct or the two gates cancel each other. One-time setup: `plan/13-cd/gcp-setup.md`; rollback and secret rotation: `plan/13-cd/runbook.md`. Don't build or run the image locally unless asked – CI and the pipeline do it.
+`.github/workflows/deploy.yml` (Phase 13) runs on every push to `main`: it calls `ci.yml` and `eval-gate.yml` as reusable workflows (`workflow_call`, so the eval path filter can't skip the gate), then builds the image on the runner, pushes `…/trip-planner-react/app:<sha>` to Artifact Registry and deploys Cloud Run service `trip-planner-react` (WIF auth, no JSON keys; secrets `trip-planner-react-openai-key` / `trip-planner-react-passcode` from Secret Manager; every GCP name is prefixed `trip-planner-react` because the project hosts other apps, incl. a separate AgentsVille service owning `agentsville*` and `openai-api-key` – never reuse those; settings from GitHub repo variables). The concurrency groups in `ci.yml` / `eval-gate.yml` carry `ci-` / `evals-` prefixes because inside a called workflow `github.workflow` is the caller's name – keep them distinct or the two gates cancel each other. One-time setup: `plan/13-cd/gcp-setup.md`; rollback and secret rotation: `plan/13-cd/runbook.md`. Don't build or run the image locally unless asked – CI and the pipeline do it.
 
 `pytest.ini` sets `pythonpath = .`, registers the `llm` marker and skips it by default. Tests never touch the network unless marked `@pytest.mark.llm`; unit tests use `FakeOpenAIClient` from `tests/conftest.py` and `load_settings({...})` instead of the real `.env`.
 
