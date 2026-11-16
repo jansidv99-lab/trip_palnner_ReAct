@@ -131,3 +131,41 @@ production traffic doesn't have.
 C3 (Phase 16) alerts when an online rate crosses its offline threshold over a rolling window.
 Worth watching first: `b3/faithfulness` (B0 recording at 50%) and `b3/thought_action_inconsistency`
 (the "says it changed the plan, sends the same plan" pattern behind B2's loops).
+
+---
+
+# Phase 12 – Step 6: traveler feedback contract
+
+**Question it serves (B5):** how does production traffic make the evals better? A thumbs-down with
+a comment is the cheapest signal that a plan the graders accepted didn't work for a real traveler.
+
+## What each feedback event logs (`schema_version = "feedback.v1"`)
+
+Model: `agentsville/ui/feedback.py` `FeedbackRecord`. One record per run at most (the UI replaces
+the buttons with a thank-you after the first submission).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schema_version` | `"feedback.v1"` | bump on any change of meaning |
+| `run_id` | str | joins with the `AgentRun` and the `b1.v1` / `b2.v1` / `b3.v1` signals |
+| `rating` | `"up"` \| `"down"` | the traveler's verdict on the plan |
+| `comment` | str, ≤ 1000 chars | optional free text, whitespace-stripped |
+| `model` | str | model the run used |
+| `prompt_version` | str | itinerary prompt version the run used |
+| `created_at` | datetime (UTC) | when the feedback was given |
+
+## Where it goes
+- Written through the `FeedbackSink` protocol. Locally: `JsonlFeedbackSink` →
+  `logs/feedback.jsonl` (git-ignored; `AGENTSVILLE_FEEDBACK_LOG` overrides the path, `off`
+  disables it). Phase 13/14: a structured-log sink → Cloud Logging → BigQuery (C1). The UI doesn't
+  change.
+- **Privacy:** comments are free text and may contain personal details; they stay out of golden
+  datasets until reviewed and anonymised (B5).
+
+## Metrics for C2 (Phase 15)
+
+| Metric | Formula |
+|---|---|
+| `feedback/rate` | runs with feedback ÷ runs |
+| `feedback/thumbs_down_rate` | `down` ÷ all feedback |
+| `feedback/down_but_graders_passed` | `down` where the run's `goal_completed` (b2.v1) is true ÷ `down` – the evals' blind spot, B5's main input |
