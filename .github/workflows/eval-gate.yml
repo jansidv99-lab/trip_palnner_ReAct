@@ -2,6 +2,8 @@
 # Phase 8 – Step 9: + judge calibration replay and the B1 threshold report.
 # No secrets and no LLM cost: every response comes from evals/cassettes/. Informational for now;
 # B4 (Phase 11) adds thresholds/baselines and makes it a required check.
+# Phase 13 – Step 5: also callable from deploy.yml (workflow_call). A call ignores the path filter
+# below, so every deploy is gated by the replay – even for doc-only commits.
 name: Evals
 
 on:
@@ -14,12 +16,14 @@ on:
     paths: ["agentsville/**", "prompts/**", "evals/**", "data/**", "scripts/run_experiment.py", "scripts/calibrate_judge.py",
             ".github/workflows/eval-gate.yml"]
   workflow_dispatch:
+  workflow_call: # Phase 13 – Step 5: reused as the deploy gate
 
 permissions:
   contents: read
 
+# Phase 13 – Step 5: "evals-" prefix keeps this group apart from CI's when both are called by deploy
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: evals-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

@@ -26,10 +26,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-Phases 0–10 are merged (agent, tools, evals, harness B0, B1–B3 graders). **Phase 12 – Streamlit UI**
-(`plan/12-streamlit-ui/plan.md`) is in progress on `feature/phase-12-streamlit-ui`. Roadmap order
-(master plan v5): 12 → 13 (Cloud Run CD) → 11 (B4) → 14–18. Phase numbers are stable IDs, not
-execution order, so "until Phase 11" below means after 12 and 13.
+Phases 0–10 and 12 (Streamlit UI, Steps 1–6) are merged. **Phase 13 – CD → Cloud Run**
+(`plan/13-cd/`) is in progress on `feature/phase-13-cloud-run-cd`; the first deploy and the
+real-model checks (incl. the postponed Phase 12 Step 7) happen after its merge. Roadmap order
+(master plan v5): 12 → 13 → 11 (B4) → 14–18. Phase numbers are stable IDs, not execution order, so
+"until Phase 11" below means after 12 and 13.
 
 ## Commands
 
@@ -69,16 +70,19 @@ python scripts/build_relevancy_calibration.py       # prints items for review; -
 python scripts/build_thought_action_calibration.py  # same; needs experiments/live-v1-r3 (git-ignored)
 ```
 
-CI (`.github/workflows/ci.yml`) runs two jobs on every PR and push to `main`: `lint` (`ruff check .`) and `test` (`pytest`). Both are required checks on `main`. `llm`-marked tests never run in CI, and CI uses no secrets.
+CI (`.github/workflows/ci.yml`) runs on every PR and push to `main`: `lint` (`ruff check .`), `test` (`pytest`) and `container` (builds the `Dockerfile`, checks `/_stcore/health` and that the app's modules, data and prompt load inside the image). `lint` and `test` are required checks on `main`. `llm`-marked tests never run in CI, and CI uses no secrets.
 `.github/workflows/eval-gate.yml` (`Evals / eval-replay`, informational until Phase 11) replays the
 committed cassettes and fails if replayed results differ from `expected_results.jsonl`. It
 also replays the judge calibration, and shows threshold verdicts (`continue-on-error` until B4). Run both locally before committing.
+`.github/workflows/deploy.yml` (Phase 13) runs on every push to `main`: it calls `ci.yml` and `eval-gate.yml` as reusable workflows (`workflow_call`, so the eval path filter can't skip the gate), then builds the image on the runner, pushes `…/agentsville/app:<sha>` to Artifact Registry and deploys Cloud Run service `agentsville` (WIF auth, no JSON keys; secrets `openai-api-key` / `app-passcode` from Secret Manager; settings from GitHub repo variables). The concurrency groups in `ci.yml` / `eval-gate.yml` carry `ci-` / `evals-` prefixes because inside a called workflow `github.workflow` is the caller's name – keep them distinct or the two gates cancel each other. One-time setup: `plan/13-cd/gcp-setup.md`; rollback and secret rotation: `plan/13-cd/runbook.md`. Don't build or run the image locally unless asked – CI and the pipeline do it.
 
 `pytest.ini` sets `pythonpath = .`, registers the `llm` marker and skips it by default. Tests never touch the network unless marked `@pytest.mark.llm`; unit tests use `FakeOpenAIClient` from `tests/conftest.py` and `load_settings({...})` instead of the real `.env`.
 
 ## Configuration
 
-`.env` (loaded via python-dotenv) provides: `OPENAI_API_KEY`, `OPENAI_BASE_URL` (OpenAI-compatible endpoint, may not be api.openai.com), `MODEL`, `PROMPT_VERSION`, `GCP_PROJECT_ID`, `GCP_PROJECT_NUMBER`, `REGION`, `GIT_REPO`. Use the existing GCP project/region; don't create new ones.
+`.env` (loaded via python-dotenv) provides: `OPENAI_API_KEY`, `OPENAI_BASE_URL` (OpenAI-compatible endpoint, may not be api.openai.com), `MODEL`, `PROMPT_VERSION`, `GCP_PROJECT_ID`, `GCP_PROJECT_NUMBER`, `REGION`, `GIT_REPO`. Use the existing GCP project/region; don't create new ones, and never write their values into committed files (docs use shell variables).
+
+UI/runtime switches (optional, read from the environment): `AGENTSVILLE_RUN_LOG` (run-log path; `off` disables; unset → `logs/agent_runs.jsonl`), `AGENTSVILLE_FEEDBACK_LOG` (path, `stdout` for Cloud Logging, or `off`; unset → `logs/feedback.jsonl`), `APP_PASSCODE` (set → passcode gate). The `Dockerfile` sets `AGENTSVILLE_RUN_LOG=off` and `AGENTSVILLE_FEEDBACK_LOG=stdout`; Cloud Run injects `APP_PASSCODE` and `OPENAI_API_KEY` from Secret Manager.
 
 ## Architecture
 
@@ -182,6 +186,13 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
   - `GroundingSignal` (`b1.v1`): code graders on every production run, the reasons judge on 10%.
   - `ConstraintSignal` (`b2.v1`), `constraint_signal(run)`: built from the run alone (no labels in production, so label graders stay offline), $0. `goal_completed` follows the harness rule; `constraints` is a dict of hard eval → passed.
   - `RelevancySignal` (`b3.v1`), `relevancy_signal(outcomes, judges_sampled)`: code graders on every run, both B3 judges on the 10% sample. "Not measured" is `null`, never `0` (a judge that examined nothing reports `null`).
+- **Streamlit UI** (Phase 12): `app.py` only draws; the logic is pure and unit-tested in `agentsville/ui/`.
+  - `form.py`: `TripForm` → `to_vacation_info` → `VacationInfo | list[FieldError]` (Pydantic errors in plain words); interest hints from `data_api`; `RunOptions` (model, weather judge, max steps).
+  - `run.py`: `AgentBackend` (LLM, prompt version, log path), built once per session by `make_backend()` and kept in `st.session_state["backend"]`; `run_agent`; `outcome` (success / warning / error via `classify_failure`) and `explain_failure`.
+  - `views.py`: day cards, cost summary (actual price sum), eval rows, and `quality_panel` – the deterministic B1–B3 graders via `grade_run` with no golden case (label graders show n/a; LLM judges aren't run). `GRADER_LABELS` must name every code grader (tested).
+  - `feedback.py`: `FeedbackRecord` (`feedback.v1`) through a `FeedbackSink` (`JsonlFeedbackSink`, `StdoutFeedbackSink`). `access.py`: the `APP_PASSCODE` gate (Phase 13).
+  - Streamlit reruns the script on every interaction: the Generate button only sets `run_requested`; the next rerun disables every input (any click would abort a paid run) and runs the agent; the finished `AgentRun` lives in `st.session_state["run"]`.
+  - `tests/test_app.py` (AppTest) must never build the real backend: an autouse fixture makes `make_backend` fail and unsets `APP_PASSCODE`; every test pre-sets `backend` (with `ScriptedLLM`) and `feedback_sink`.
 - Always read text files with `encoding="utf-8"`. The Windows default (cp1252) garbles the data's em dashes and curly quotes, and CI on Linux won't catch it.
 - `scripts/review_data.py` prints the data review tables. Findings and their implications for evals and the agent prompt are in `plan/03-data-access/data-review.md`.
 - `data/data.py`: raw mock data. Tools must not invent data beyond it.

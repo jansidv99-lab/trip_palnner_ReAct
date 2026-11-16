@@ -1,0 +1,9 @@
+# Phase 13 – Step 1: Streamlit settings shared by local runs and the container.
+[server]
+headless = true          # never try to open a browser (containers have none)
+
+[browser]
+gatherUsageStats = false # no telemetry from the app
+
+[client]
+toolbarMode = "minimal"  # hide developer menu items from travelers

@@ -157,8 +157,10 @@ the buttons with a thank-you after the first submission).
 ## Where it goes
 - Written through the `FeedbackSink` protocol. Locally: `JsonlFeedbackSink` →
   `logs/feedback.jsonl` (git-ignored; `AGENTSVILLE_FEEDBACK_LOG` overrides the path, `off`
-  disables it). Phase 13/14: a structured-log sink → Cloud Logging → BigQuery (C1). The UI doesn't
-  change.
+  disables it). **Phase 13:** `AGENTSVILLE_FEEDBACK_LOG=stdout` (set in the `Dockerfile`) selects
+  `StdoutFeedbackSink`, which prints the record as one JSON line with `severity: "INFO"`,
+  `message` and `event: "feedback"` → a structured Cloud Logging entry
+  (`jsonPayload.event="feedback"`). Phase 14 routes it on to BigQuery (C1). The UI doesn't change.
 - **Privacy:** comments are free text and may contain personal details; they stay out of golden
   datasets until reviewed and anonymised (B5).
 

@@ -2,3 +2,7 @@
 # so they must have identical bytes on every OS – always LF, regardless of core.autocrlf.
 prompts/** text eol=lf
 evals/** text eol=lf
+# Phase 13 – Step 1: files executed inside the Linux container keep LF on every OS.
+Dockerfile text eol=lf
+.dockerignore text eol=lf
+.streamlit/** text eol=lf

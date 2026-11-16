@@ -1,5 +1,7 @@
 # Phase 1 – Step 1: CI – lint and unit tests (Layer A) on every PR and push to main.
 # No secrets are used: `llm`-marked tests are skipped by pytest.ini, unit tests use fakes.
+# Phase 13 – Step 5: also callable from deploy.yml (workflow_call), so deploys run the same gate.
+# Phase 13 – Step 6: + container job – the production image builds and answers its health check.
 name: CI
 
 on:
@@ -8,14 +10,17 @@ on:
   push:
     branches: [main]
   workflow_dispatch: # manual "Run workflow" button in the Actions tab
+  workflow_call: # Phase 13 – Step 5: reused as the deploy gate
 
 # Least privilege: CI only reads the code.
 permissions:
   contents: read
 
 # A newer push to the same branch/PR cancels the older, now-stale run.
+# Phase 13 – Step 5: "ci-" prefix – when called from deploy.yml, github.workflow is the CALLER's
+# name, and without a prefix the CI and Evals gates would share (and cancel) one group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -60,3 +65,35 @@ jobs:
 
       - name: Test
         run: pytest -v
+
+  # Phase 13 – Step 6: the production image builds and starts (reported as "CI / container").
+  # No secrets: without OPENAI_API_KEY the app still starts and shows its setup message.
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t agentsville:ci .
+
+      - name: Start container and check health
+        run: |
+          docker run -d --name app -p 8080:8080 agentsville:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/_stcore/health; then echo; exit 0; fi
+            sleep 2
+          done
+          echo "health check failed"; docker logs app; exit 1
+
+      - name: Import check inside the image (catches files missing from .dockerignore)
+        run: |
+          docker run --rm --entrypoint python agentsville:ci -c "
+          from agentsville.ui import views, run, form, feedback, access
+          from agentsville.prompts import load_itinerary_prompt
+          from agentsville.tools import build_default_registry
+          from agentsville import data_api
+          assert data_api.get_activities('2025-06-10'), 'no activity data in image'
+          assert load_itinerary_prompt('v1', build_default_registry().catalog())
+          print('imports, data and prompt OK')
+          "

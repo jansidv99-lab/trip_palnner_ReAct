@@ -12,9 +12,9 @@ activities, calculator, evals), reads the results, and repeats until it returns 
 - Requirements: [`goal.md`](goal.md)
 - Roadmap: [`plan/00-master/master-plan.md`](plan/00-master/master-plan.md)
 
-> Status: the ReAct agent works end to end from the command line. The eval harness (Phase 7 – B0),
-> grounding (Phase 8 – B1), constraints & completion (Phase 9 – B2) and relevancy & reasoning
-> (Phase 10 – B3) evals are done. Next: the Streamlit UI and deployment to Cloud Run.
+> Status: the ReAct agent works end to end, from the command line and in a Streamlit web app. The
+> eval harness (Phase 7 – B0), grounding (B1), constraints & completion (B2) and relevancy &
+> reasoning (B3) evals are done. Deployment to Cloud Run (Phase 13) is being set up.
 
 ## Setup
 
@@ -42,6 +42,27 @@ python scripts/run_evals.py                  # evaluate sample_plan.json
 ```
 
 Each run is appended to `logs/agent_runs.jsonl` and typically costs 1–3 cents.
+
+## Run the web app
+
+```bash
+streamlit run app.py                # http://localhost:8501
+```
+
+Fill in travelers, dates and budget (pre-filled with the sample trip) and click **Generate
+itinerary**. You see every agent step live, then the day-by-day plan, the eval report, a free
+quality panel (the B1–B3 code checks), and can leave 👍 / 👎 feedback (`logs/feedback.jsonl`).
+
+## Deployment (Cloud Run)
+
+Every merge to `main` runs [`deploy.yml`](.github/workflows/deploy.yml): lint, tests, a container
+check and the eval replay must pass, then the image is built, pushed to Artifact Registry and
+deployed to Cloud Run. GitHub signs in to GCP with Workload Identity Federation (no keys), the
+OpenAI key and the app passcode come from Secret Manager, and the public URL asks for the passcode
+because every run spends OpenAI credit.
+
+- One-time setup: [`plan/13-cd/gcp-setup.md`](plan/13-cd/gcp-setup.md)
+- Roll back, rotate secrets: [`plan/13-cd/runbook.md`](plan/13-cd/runbook.md)
 
 ## Experiments (golden dataset)
 
@@ -72,12 +93,14 @@ pytest -m llm                       # tests that call the real LLM (small cost)
 ruff check .                        # lint
 ```
 
-The same lint and unit tests run in CI (GitHub Actions) on every pull request and push to `main`.
+The same lint and unit tests run in CI (GitHub Actions) on every pull request and push to `main`,
+plus a check that the production container builds and starts.
 
 ## Project layout
 
 ```
-agentsville/   application code (config, LLM client, models, data API, evals, tools, agent)
+app.py         Streamlit web app (thin; logic in agentsville/ui/)
+agentsville/   application code (config, LLM client, models, data API, evals, tools, agent, ui)
 prompts/       versioned system prompts (prompts/itinerary/v1.md)
 evals/         golden datasets (versioned, immutable) and recorded LLM cassettes
 data/          mock activity and weather data (the "APIs")

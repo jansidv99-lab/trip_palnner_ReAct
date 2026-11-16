@@ -64,3 +64,30 @@ def test_feedback_sink_from_environment(tmp_path):
     assert feedback_sink({"AGENTSVILLE_FEEDBACK_LOG": "off"}) is None
     custom = feedback_sink({"AGENTSVILLE_FEEDBACK_LOG": str(tmp_path / "f.jsonl")})
     assert custom.path == Path(tmp_path / "f.jsonl")
+
+
+# Phase 13 – Step 2: stdout sink for Cloud Run (Cloud Logging reads JSON lines from stdout)
+def test_stdout_sink_prints_one_structured_json_line(run):
+    import io
+
+    from agentsville.ui.feedback import StdoutFeedbackSink
+
+    stream = io.StringIO()
+    StdoutFeedbackSink(stream).write(make_feedback(run, "down", "Too much walking", now=NOW))
+    lines = stream.getvalue().splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    assert entry["severity"] == "INFO" and entry["event"] == "feedback"
+    assert entry["schema_version"] == "feedback.v1"
+    assert (entry["rating"], entry["comment"], entry["run_id"]) == (
+        "down", "Too much walking", run.run_id,
+    )
+    assert FeedbackRecord.model_validate(
+        {k: v for k, v in entry.items() if k not in ("severity", "message", "event")}
+    ).created_at == NOW
+
+
+def test_feedback_sink_stdout_from_environment():
+    from agentsville.ui.feedback import StdoutFeedbackSink
+
+    assert isinstance(feedback_sink({"AGENTSVILLE_FEEDBACK_LOG": "stdout"}), StdoutFeedbackSink)
