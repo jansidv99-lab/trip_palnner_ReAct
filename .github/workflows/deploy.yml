@@ -17,9 +17,13 @@ concurrency:
   group: deploy-production
   cancel-in-progress: false
 
+# Names are prefixed `trip-planner-react` so they can't collide with the project's other apps
+# (another AgentsVille service already uses `agentsville*` and `openai-api-key`).
 env:
-  SERVICE: agentsville
-  AR_REPO: agentsville
+  SERVICE: trip-planner-react
+  AR_REPO: trip-planner-react
+  OPENAI_SECRET: trip-planner-react-openai-key
+  PASSCODE_SECRET: trip-planner-react-passcode
 
 jobs:
   # Phase 13 – Step 5: the gates, reused – exactly the jobs PRs run
@@ -72,7 +76,7 @@ jobs:
             --region "${{ vars.GCP_REGION }}" \
             --service-account "${{ vars.RUNTIME_SA }}" \
             --allow-unauthenticated \
-            --set-secrets "OPENAI_API_KEY=openai-api-key:latest,APP_PASSCODE=app-passcode:latest" \
+            --set-secrets "OPENAI_API_KEY=${OPENAI_SECRET}:latest,APP_PASSCODE=${PASSCODE_SECRET}:latest" \
             --set-env-vars "OPENAI_BASE_URL=${{ vars.OPENAI_BASE_URL }},MODEL=${{ vars.MODEL }},PROMPT_VERSION=v1" \
             --labels "commit-sha=${GITHUB_SHA}" \
             --cpu 1 --memory 1Gi \
