@@ -21,12 +21,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    # Phase 2 – Step 3: <purpose of this code>
    ```
 8. **Learning-oriented:** this project is a hands-on learning exercise. Go step by step, explain new concepts as they come up, and never build everything in one go.
-9. **Sync before new work:** `git switch main && git pull` (the repo is configured with `pull.ff=only` and `fetch.prune=true`), confirm `git status` says "up to date with 'origin/main'", then create the new branch from `main`. After a PR is merged: `git switch main && git pull && git branch -d <merged-branch>`.
+9. **Sync before new work:** `git switch main && git pull` (Git Bash; in PowerShell 5.1, which has no `&&`: `git switch main; if ($?) { git pull }`) (the repo is configured with `pull.ff=only` and `fetch.prune=true`), confirm `git status` says "up to date with 'origin/main'", then create the new branch from `main`. After a PR is merged: `git switch main && git pull && git branch -d <merged-branch>`.
 10. **GitHub activities:** do not perform any GitHub-related activities (push, opening/merging PRs, remote branch operations); the developer performs them manually. Always provide the exact commands to execute. Local git (switch, branch, pull, commit with permission per rule 5) is fine.
+
+## Current state
+
+Phases 0–10 are merged (agent, tools, evals, harness B0, B1–B3 graders). **Phase 12 – Streamlit UI**
+(`plan/12-streamlit-ui/plan.md`) is in progress on `feature/phase-12-streamlit-ui`. Roadmap order
+(master plan v5): 12 → 13 (Cloud Run CD) → 11 (B4) → 14–18. Phase numbers are stable IDs, not
+execution order, so "until Phase 11" below means after 12 and 13.
 
 ## Commands
 
-Python 3.11 in a local `.venv` (Windows paths shown; run everything from the repo root):
+Python 3.11 in a local `.venv` (Windows paths shown; run everything from the repo root). The shell
+lines below are for Git Bash; in PowerShell 5.1 replace `&&` with `;` and activate with
+`.venv\Scripts\Activate.ps1`.
 
 ```bash
 py -3.11 -m venv .venv && .venv\Scripts\activate
@@ -39,6 +48,10 @@ pytest tests/test_config.py::test_prompt_version_lowercased   # single test
 pytest -m llm                                # opt-in tests that call the real LLM (cost money)
 python scripts/smoke_llm.py [model]          # manual check that key/endpoint/model work
 python scripts/run_agent.py [--sample rainy]  # real agent run, printed step by step
+streamlit run app.py                         # the Streamlit UI (Phase 12)
+python scripts/run_evals.py [--no-llm] [--plan FILE]  # eval report for a plan vs sample_vacation_info()
+python scripts/try_tools.py [--catalog] [--llm]       # sample ACTIONs through the tool registry
+python scripts/review_data.py                # data review tables (see plan/03-data-access/data-review.md)
 python scripts/run_experiment.py --check-expected   # replay golden v1.0.0 (free) + repeatability check
 python scripts/run_experiment.py --mode record      # re-record cassettes after prompt/agent changes (~$0.20)
 python scripts/run_experiment.py --mode live --repeats 3   # fresh runs to measure variance (~$0.60)
@@ -90,7 +103,6 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
   - **The judge** (`gpt-4.1`, JSON mode) only runs for activities on inclement days. It **fails closed**: an unparseable reply or an LLM error counts as unsuitable.
   - Pass `include_llm=False` for free, offline runs; unit tests use a `FakeLLM` in `tests/test_evals.py`.
   - The judge's calibration cases live in `tests/test_evals_live.py` (`pytest -m llm`).
-  - `scripts/run_evals.py [--no-llm] [--plan FILE]` prints a report against `sample_vacation_info()`.
 - `agentsville/tools.py`: the agent's tools. `build_default_registry()` returns a `ToolRegistry` with 7 tools: `calculator_tool`, `get_weather_for_date_tool`, `get_activities_by_date_tool`, `get_activity_by_id_tool`, `filter_activities_by_interest_tool`, `run_evals_tool` and `final_answer_tool`.
   - `registry.execute(name, arguments, ToolContext)` returns a `ToolResult` (`observation`, `is_error`, `is_final`, `travel_plan`).
   - It **never raises**: unknown tools, Pydantic argument errors and exceptions inside a tool become `ERROR: …` observations.
@@ -100,9 +112,8 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
   - The calculator uses an AST whitelist (`safe_eval`), never `eval()`.
   - `registry.catalog()` renders the tool list for the system prompt. `travel_plan` arguments refer to a TravelPlan schema the prompt must include.
   - **To add a tool:** define a Pydantic args model and a `(args, context) -> ToolResult` function, then add a `Tool(...)` entry in `build_default_registry()`.
-  - `scripts/try_tools.py [--catalog] [--llm]` runs sample ACTIONs through the registry.
 - `agentsville/agent.py`: `ItineraryAgent(llm, ...).run(vacation_info) -> AgentRun`, the ReAct loop.
-  - **Reply format:** each reply is ONE JSON object `{"thought": ..., "action": {"tool_name": ..., "arguments": {...}}}`, requested with `json_mode=True`. We switched from free-text `THOUGHT:/ACTION:` because gpt-4o-mini miscounted brackets in the ~6k-char final plan and looped until `max_steps`; JSON mode guarantees valid JSON. `parse_agent_reply` raises `ReplyParseError` with guidance, which the loop sends back as the observation.
+  - **Reply format:** each reply is ONE JSON object `{"thought": ..., "action": {"tool_name": ..., "arguments": {...}}}`, requested with `json_mode=True` (don't go back to free-text `THOUGHT:/ACTION:`: gpt-4o-mini breaks the brackets of the large final plan). `parse_agent_reply` raises `ReplyParseError` with guidance, which the loop sends back as the observation.
   - **Each step:** the tool's observation goes back as a user message `"OBSERVATION: …"`.
   - **Guardrail:** a `final_answer_tool` plan that fails the deterministic evals is rejected, up to `max_final_rejections=2`. After that it's accepted, and the failure shows in `final_eval_report`.
   - **Stop reasons:** `final_answer` | `max_steps` (default 20) | `llm_error`.
@@ -150,9 +161,9 @@ Application code lives in the `agentsville/` package (imports: `from agentsville
 - **Judge calibration** (every LLM judge is measured against human labels before its numbers are trusted):
   - Human labels live in `evals/datasets/calibration/<name>/<version>/items.jsonl` (`reasons`, `relevancy`, `thought_action`), immutable like golden, each with a `CHANGELOG.md` recording the labeling rule and the owner-approved judgement calls. Loaders: `load_calibration`, `load_relevancy_calibration`, `load_thought_action_calibration`; `write_calibration` writes any item model.
   - `harness/calibration.py`: binary judges get precision/recall/F1/kappa with **the failure to catch as the positive class** (ungrounded; inconsistent). The 1–5 relevancy judge gets ordinal agreement: exact, within-1, MAE and **quadratic weighted kappa**.
-  - Committed reports: `evals/cassettes/calibration/<name>-v1.0.0/<model>__<prompt>/report.json`. A prompt bump gets a new folder; the old report stays as history (relevancy `gpt-4.1__v1` failed at κ 0.51, `v2` is current). `calibrate_judge.py --judge all` (the default) skips a judge without a calibration set.
+  - Committed reports: `evals/cassettes/calibration/<name>-v1.0.0/<model>__<prompt>/report.json`. A prompt bump gets a new folder; the old report stays as history (relevancy `v2` is current). `calibrate_judge.py --judge all` (the default) skips a judge without a calibration set.
   - **Pattern for judges ("LLM extracts, code decides"):** ask the LLM only for what needs judgement, give it code-computed FACTs, verify every claim code can check, and compute scores in code. The relevancy judge returns per-day `possible` facts; code checks the named option (real, unplanned, matching, affordable, non-overlapping), computes `served`, and applies the labeling rule (`score_from_days`). The thought↔action judge gets "IDENTICAL to the travel_plan sent at step N" and "prices sum to X, budget Y" facts, and an inconsistent verdict must quote the thought verbatim or it's dropped.
-  - Calibration sets are small and built from the stored runs they measure; a perfect score is optimistic (fresh data found a relevancy scoring bug: a served day must count as possible).
+  - Calibration sets are small and built from the stored runs they measure; a perfect score is optimistic.
 - `agentsville/graders/constraints.py` (Phase 9, B2, "does the plan satisfy the hard constraints?"), all code, no LLM:
   - `weather_label_compliance`: planned activities on *really* inclement days (ambiguous ones skipped) vs the case's `must_avoid_activity_ids`.
   - `infeasible_handling` (`needs_plan=False`): only for cases with `max_affordable_activities == 0`; passes on `final_answer` + empty plan + `total_cost == 0`.
