@@ -1,0 +1,97 @@
+# Phase 13 – Step 6: CD – every push to main deploys the Streamlit app to Cloud Run, but only after
+# the same gates that protect main pass: CI (lint, test, container) and the eval replay (decision
+# Q9; B4 adds the regression gate later). GitHub signs in to GCP with Workload Identity Federation
+# (no JSON keys). One-time setup: plan/13-cd/gcp-setup.md. Rollback: plan/13-cd/runbook.md.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # redeploy main by hand (e.g. after rotating a secret)
+
+permissions:
+  contents: read
+
+# Deploys run one at a time, in order; a newer merge waits instead of cancelling a deploy halfway.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  SERVICE: agentsville
+  AR_REPO: agentsville
+
+jobs:
+  # Phase 13 – Step 5: the gates, reused – exactly the jobs PRs run
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  evals:
+    uses: ./.github/workflows/eval-gate.yml
+
+  # Phase 13 – Step 6: build → push → deploy → smoke test
+  deploy:
+    needs: [ci, evals]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write # lets the job request a GitHub OIDC token for WIF
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push the image (tagged with the commit SHA)
+        id: image
+        run: |
+          REGISTRY="${{ vars.GCP_REGION }}-docker.pkg.dev"
+          IMAGE="${REGISTRY}/${{ vars.GCP_PROJECT_ID }}/${AR_REPO}/app:${GITHUB_SHA}"
+          gcloud auth configure-docker "$REGISTRY" --quiet
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      # --allow-unauthenticated: the URL is public, the app's passcode gate (APP_PASSCODE) protects it.
+      # --session-affinity + --timeout 900: Streamlit keeps one WebSocket per tab for the 1–2 min run.
+      # --max-instances 2: a flood of visitors can't fan out (and spend) without limit.
+      - name: Deploy to Cloud Run
+        id: deploy
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --image "${{ steps.image.outputs.image }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --service-account "${{ vars.RUNTIME_SA }}" \
+            --allow-unauthenticated \
+            --set-secrets "OPENAI_API_KEY=openai-api-key:latest,APP_PASSCODE=app-passcode:latest" \
+            --set-env-vars "OPENAI_BASE_URL=${{ vars.OPENAI_BASE_URL }},MODEL=${{ vars.MODEL }},PROMPT_VERSION=v1" \
+            --labels "commit-sha=${GITHUB_SHA}" \
+            --cpu 1 --memory 1Gi \
+            --min-instances 0 --max-instances 2 \
+            --concurrency 20 --timeout 900 \
+            --session-affinity \
+            --quiet
+          URL=$(gcloud run services describe "$SERVICE" --region "${{ vars.GCP_REGION }}" \
+            --format 'value(status.url)')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test (health endpoint must answer 200)
+        run: |
+          curl -fsS --retry 10 --retry-delay 6 --retry-all-errors \
+            "${{ steps.deploy.outputs.url }}/_stcore/health"
+          echo
+          {
+            echo "### Deployed :rocket:"
+            echo "- URL: ${{ steps.deploy.outputs.url }}"
+            echo "- Image: \`${{ steps.image.outputs.image }}\`"
+            echo "- Rollback: see plan/13-cd/runbook.md"
+          } >> "$GITHUB_STEP_SUMMARY"

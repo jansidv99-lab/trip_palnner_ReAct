@@ -22,6 +22,8 @@ def _no_real_backend(monkeypatch):
         raise AssertionError("test tried to build the real backend")
 
     monkeypatch.setattr("agentsville.ui.run.make_backend", refuse)
+    # Phase 13 – Step 3: tests run without the passcode gate unless they set it themselves
+    monkeypatch.delenv("APP_PASSCODE", raising=False)
 
 
 # Phase 12 – Step 1: run the script once and return the rendered app
@@ -196,3 +198,35 @@ def test_missing_api_key_shows_setup_help(monkeypatch):
     at.button(key="generate").click().run()
     assert not at.exception
     assert at.error[0].value == SETUP_HELP
+
+
+# Phase 13 – Step 3: with APP_PASSCODE set, only the passcode screen is shown
+def test_passcode_gate_hides_the_app(monkeypatch):
+    monkeypatch.setenv("APP_PASSCODE", "s3cret")
+    at = _run_app()
+    assert not at.exception
+    assert [h.value for h in at.header] == []  # no form, no sections
+    assert "backend" in at.session_state  # pre-set by the test, never built by the app
+    assert not at.session_state["backend"].llm.agent_calls
+
+
+def test_wrong_passcode_then_right_one(monkeypatch):
+    monkeypatch.setenv("APP_PASSCODE", "s3cret")
+    at = _run_app()
+    at.text_input(key="passcode").set_value("nope")
+    at.button(key="unlock").click().run()
+    assert "Wrong passcode (1 of 5 attempts)." in at.error[0].value
+    assert at.text_input(key="passcode").value == ""  # typed code is cleared
+    at.text_input(key="passcode").set_value(" s3cret ")
+    at.button(key="unlock").click().run()
+    assert [h.value for h in at.header] == list(SECTIONS)
+
+
+def test_too_many_wrong_passcodes_lock_the_session(monkeypatch):
+    monkeypatch.setenv("APP_PASSCODE", "s3cret")
+    at = _run_app()
+    for _ in range(5):
+        at.text_input(key="passcode").set_value("nope")
+        at.button(key="unlock").click().run()
+    assert "Too many wrong passcodes" in at.error[0].value
+    assert not at.text_input  # no more passcode box

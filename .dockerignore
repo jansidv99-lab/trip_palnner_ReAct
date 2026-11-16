@@ -1,0 +1,12 @@
+# Phase 13 – Step 1: allow-list for the image build context.
+# Everything is excluded except what the app needs, so .env, tests, cassettes, logs,
+# experiments and the virtualenv can never end up in the image.
+*
+!app.py
+!requirements.txt
+!.streamlit/
+!agentsville/
+!data/
+!prompts/
+**/__pycache__
+**/*.py[cod]

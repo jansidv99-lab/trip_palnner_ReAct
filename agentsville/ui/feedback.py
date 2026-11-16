@@ -2,13 +2,16 @@
 """A `FeedbackRecord` (schema "feedback.v1") is B5's input: it joins with the run by `run_id`.
 
 The UI writes records through the `FeedbackSink` protocol. Locally that's `JsonlFeedbackSink`
-(`logs/feedback.jsonl`, git-ignored); Phase 13/14 add a Cloud Logging sink without changing the UI.
+(`logs/feedback.jsonl`, git-ignored). On Cloud Run (Phase 13) `StdoutFeedbackSink` prints one JSON
+line per record, which Cloud Logging stores as a structured entry – the UI doesn't change.
 """
 
+import json
 import os
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TextIO
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -55,6 +58,24 @@ class JsonlFeedbackSink:
             f.write(record.model_dump_json() + "\n")
 
 
+# Phase 13 – Step 2: one JSON line per record on stdout → a structured Cloud Logging entry.
+# `severity` and `message` are fields Cloud Logging understands; `event` makes queries easy.
+class StdoutFeedbackSink:
+    def __init__(self, stream: TextIO | None = None) -> None:
+        self.stream = stream
+
+    def write(self, record: FeedbackRecord) -> None:
+        entry = {
+            "severity": "INFO",
+            "message": f"feedback {record.rating} for run {record.run_id}",
+            "event": "feedback",
+            **record.model_dump(mode="json"),
+        }
+        stream = self.stream or sys.stdout
+        stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        stream.flush()
+
+
 # Phase 12 – Step 6: the record for a run (comment is cut to the limit rather than rejected)
 def make_feedback(
     run: AgentRun, rating: Rating, comment: str = "", now: datetime | None = None
@@ -70,10 +91,13 @@ def make_feedback(
 
 
 # Phase 12 – Step 6: the sink from the environment (unset → logs/feedback.jsonl; "off" → None)
+# Phase 13 – Step 2: "stdout" → StdoutFeedbackSink (Cloud Run → Cloud Logging)
 def feedback_sink(environ: dict[str, str] | None = None) -> FeedbackSink | None:
     value = (os.environ if environ is None else environ).get(FEEDBACK_LOG_ENV)
     if value is None:
         return JsonlFeedbackSink(DEFAULT_FEEDBACK_PATH)
     if value.strip().casefold() in ("", "off", "none", "false", "0"):
         return None
+    if value.strip().casefold() == "stdout":
+        return StdoutFeedbackSink()
     return JsonlFeedbackSink(Path(value.strip()))

@@ -11,6 +11,7 @@ from agentsville.agent import AgentRun, AgentStep
 from agentsville.config import ConfigError
 from agentsville.models import TRIP_WINDOW_END, TRIP_WINDOW_START, Interest, OpenAIModel
 from agentsville.ui import APP_TAGLINE, APP_TITLE, SECTIONS
+from agentsville.ui.access import MAX_ATTEMPTS, passcode_ok, required_passcode
 from agentsville.ui.feedback import (
     MAX_COMMENT_CHARS,
     FeedbackSink,
@@ -384,16 +385,45 @@ def _draw_feedback() -> None:
     )
 
 
+# Phase 13 – Step 3: button callback – check the passcode, count wrong attempts
+def _try_unlock(expected: str) -> None:
+    if passcode_ok(st.session_state.get("passcode", ""), expected):
+        st.session_state.unlocked = True
+    else:
+        st.session_state.passcode_attempts = st.session_state.get("passcode_attempts", 0) + 1
+    st.session_state.passcode = ""  # never keep the typed code around
+
+
+# Phase 13 – Step 3: True when the page may be shown; otherwise draws the passcode screen
+def _unlocked() -> bool:
+    expected = required_passcode()
+    if expected is None or st.session_state.get("unlocked"):
+        return True
+    attempts = st.session_state.get("passcode_attempts", 0)
+    if attempts >= MAX_ATTEMPTS:
+        st.error("Too many wrong passcodes. Reload the page later to try again.")
+        return False
+    st.info("This demo is invite-only, because every itinerary uses paid AI calls.")
+    st.text_input("Passcode", type="password", key="passcode")
+    st.button("Unlock", key="unlock", on_click=_try_unlock, args=(expected,))
+    if attempts:
+        st.error(f"Wrong passcode ({attempts} of {MAX_ATTEMPTS} attempts).")
+    return False
+
+
 # Phase 12 – Step 1: draw the page skeleton; each section is a placeholder until its step lands.
 # Phase 12 – Step 2: the "Trip details" section is the real form.
 # Phase 12 – Step 3: Generate runs the agent; "Agent progress" shows the stored run.
 # Phase 12 – Step 4: "Your itinerary" shows the plan.
 # Phase 12 – Step 5: "Quality checks" shows the code graders.
 # Phase 12 – Step 6: "Feedback" collects one rating per run.
+# Phase 13 – Step 3: nothing below the title is drawn until the passcode gate is passed.
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, page_icon="🧭", layout="wide")
     st.title(APP_TITLE)
     st.caption(APP_TAGLINE)
+    if not _unlocked():
+        return
     _init_state()
     busy = st.session_state.pop("run_requested", False)
 
